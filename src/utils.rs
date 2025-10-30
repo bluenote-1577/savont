@@ -1,3 +1,4 @@
+use bio_seq::seq::Seq;
 use statrs::distribution::{Binomial, DiscreteCDF};
 use memory_stats::memory_stats;
 
@@ -46,4 +47,20 @@ pub fn binomial_test(n: u64, k: u64, p: f64) -> f64 {
     let p_value = 1.0 - binomial.cdf(k);
 
     p_value
+}
+
+pub fn reverse_complement(seq: &[u8]) -> Vec<u8> {
+    let mut revcomp = Vec::with_capacity(seq.len());
+    for &base in seq.iter().rev() {
+        let comp_base = match base {
+            b'A' | b'a' => b'T',
+            b'T' | b't' => b'A',
+            b'C' | b'c' => b'G',
+            b'G' | b'g' => b'C',
+            b'N' | b'n' => b'N',
+            _ => b'N', // Handle unexpected characters
+        };
+        revcomp.push(comp_base);
+    }
+    revcomp
 }

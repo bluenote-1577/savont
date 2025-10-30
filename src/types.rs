@@ -96,6 +96,48 @@ impl From<u64> for Kmer48 {
     }
 }
 
+/// Consensus SNPmer statistics
+/// Contains the consensus k-mer for a splitmer position along with metadata
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ConsensusSnpmer {
+    /// Median position along the read where this SNPmer occurs
+    pub position: u32,
+    /// The splitmer (k-mer with middle base masked out)
+    pub splitmer: u64,
+    /// The consensus full k-mer (most common variant)
+    pub kmer: Kmer48,
+    /// Number of times this consensus k-mer was observed
+    pub count: u32,
+}
+
+impl ConsensusSnpmer {
+    pub fn new(position: u32, splitmer: u64, kmer: Kmer48, count: u32) -> Self {
+        Self { position, splitmer, kmer, count }
+    }
+}
+
+/// Consensus sequence with depth information
+/// Contains the consensus sequence and the number of reads used to generate it
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConsensusSequence {
+    /// The consensus sequence
+    pub sequence: Vec<u8>,
+    /// The depth (number of reads) used to generate this consensus
+    pub depth: usize,
+
+    pub cluster: Vec<usize>,
+
+    pub low_quality_positions: Vec<usize>,
+
+    pub id: usize,
+}
+
+impl ConsensusSequence {
+    pub fn new(sequence: Vec<u8>, depth: usize, id: usize, cluster: Vec<usize>) -> Self {
+        Self { sequence, depth, low_quality_positions: Vec::new(), cluster, id }
+    }
+}
+
 #[inline]
 pub fn mm_hash_64(key: u64) -> usize {
     let mut key = key;
@@ -928,6 +970,8 @@ pub struct HeavyCutOptions<'a>
     pub cut_tips: bool,
     pub debug: bool,
 }
+
+
 
 
 

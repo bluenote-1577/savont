@@ -12,6 +12,7 @@ use savont::map_processing;
 use savont::seq_parse;
 use savont::types;
 use savont::types::HeavyCutOptions;
+use savont::alignment;
 use savont::types::OverlapAdjMap;
 use savont::utils::*;
 use std::fs::File;
@@ -42,8 +43,23 @@ fn main() {
     );
     log_memory_usage(true, "STAGE 1.5: Obtained twin reads from SNPmers");
 
-    let cluster = asv_cluster::cluster_reads_by_kmers(&twin_reads, &args, &output_dir);
-    asv_cluster::cluster_reads_by_snpmers(&twin_reads, &cluster, &args, &output_dir);
+    let clusters = asv_cluster::cluster_reads_by_kmers(&twin_reads, &args, &output_dir);
+    let clusters = asv_cluster::cluster_reads_by_snpmers(&twin_reads, &clusters, &args, &output_dir);
+    let mut consensuses = alignment::align_and_consensus(&twin_reads, clusters, &args, &output_dir);
+
+    // Generate pileups for quality estimation
+    let mut pileups = alignment::generate_consensus_pileups(&twin_reads, &consensuses, &args);
+
+    // Estimate quality error rates from top 10% of clusters
+    let quality_error_map = alignment::estimate_quality_error_rates(&pileups, &consensuses, 0.1);
+
+    // Polish consensus sequences using Bayesian inference
+    alignment::polish_consensuses(&mut pileups, &mut consensuses, &quality_error_map, &args);
+    log_memory_usage(true, "STAGE 1.9: Polished consensus sequences");
+
+    // Merge similar consensus sequences based on alignment and depth
+    let consensuses = alignment::merge_similar_consensuses(&twin_reads, consensuses, &args);
+    log_memory_usage(true, "STAGE 2: Merged similar consensus sequences");
 }
 
 fn my_own_format_colored(

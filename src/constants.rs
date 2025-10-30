@@ -61,7 +61,7 @@ pub const MAX_LENGTH_SEARCH: usize = 1_000_000;
 pub const MAX_ALLOWABLE_SNPMER_ERROR_MISC: usize = 2;
 pub const MAX_ALLOWABLE_SNPMER_ERROR_DIVIDER: usize = 200;
 
-pub const DEDUP_SNPMERS: bool = false;
+pub const DEDUP_SNPMERS: bool = true;
 
 
 pub const CLI_HEADINGS: [&str; 5] = [

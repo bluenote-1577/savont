@@ -25,6 +25,10 @@ pub struct Cli {
     /// PacBio HiFi mode -- assumes less chimericism and higher accuracy
     #[arg(long, help_heading = CLI_HEADINGS[0])]
     pub hifi: bool,
+
+    /// 16s rRNA mode -- optimizes parameters for full-length 16s assembly
+    #[arg(long, help_heading = CLI_HEADINGS[0], default_value_t=true)]
+    pub full_length_16s: bool,
         
     /// Output directory for results; created if it does not exist
     #[arg(short, long, default_value = "savont-out")]
@@ -47,11 +51,11 @@ pub struct Cli {
     pub single_strand: bool,
 
     /// Minimum cluster size for k-mer clustering
-    #[arg(long, default_value_t=3, help_heading = CLI_HEADINGS[1])]
+    #[arg(long, default_value_t=12, help_heading = CLI_HEADINGS[1])]
     pub min_cluster_size: usize,
         
     /// Disallow reads with < % identity for graph building (estimated from base qualities) 
-    #[arg(long, default_value_t=99., help_heading = CLI_HEADINGS[1])]
+    #[arg(long, default_value_t=98., help_heading = CLI_HEADINGS[1])]
     pub quality_value_cutoff: f64,
 
     /// Minimum overlap length for graph construction
@@ -95,7 +99,7 @@ pub struct Cli {
     pub no_snpmers: bool,
 
     /// K-mer size (must be odd and < 24)
-    #[arg(short, long, default_value = "21", help_heading = CLI_HEADINGS[1], hide = true)]
+    #[arg(short, long, default_value = "17", help_heading = CLI_HEADINGS[1], hide = true)]
     pub kmer_size: usize,
 
     /// Soft clips with < this # of bases are allowed for alignment

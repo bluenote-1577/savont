@@ -9,6 +9,7 @@ pub mod seq_parse;
 pub mod map_processing;
 pub mod utils;
 pub mod asv_cluster;
+pub mod alignment;
 
 //pub mod cbloom;
 //

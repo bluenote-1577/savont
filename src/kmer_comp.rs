@@ -51,6 +51,7 @@ pub fn twin_reads_from_snpmers(kmer_info: &mut KmerGlobalInfo, args: &Cli) -> Ve
 
     let snpmer_set = Arc::new(snpmer_set);
     let twin_read_vec = Arc::new(Mutex::new(vec![]));
+    let fl16s = args.full_length_16s;
 
     let files_owned = fastq_files.clone();
     let solid_kmers_take = std::mem::take(&mut kmer_info.solid_kmers);
@@ -58,16 +59,23 @@ pub fn twin_reads_from_snpmers(kmer_info: &mut KmerGlobalInfo, args: &Cli) -> Ve
     let arc_solid = Arc::new(solid_kmers_take);
     let arc_high_freq = Arc::new(high_freq_kmers_take);
     let num_reads_removed_repetitive = Arc::new(Mutex::new(0));
+    let fl16s = Arc::new(fl16s);
 
     for fastq_file in files_owned{
         let (mut tx, rx) = spmc::channel();
+        let fl16s_clone = Arc::clone(&fl16s);
         thread::spawn(move || {
             let mut reader = needletail::parse_fastx_file(fastq_file).expect("valid path");
             while let Some(record) = reader.next() {
                 let rec = record.expect("Error reading record");
                 let seq;
                 seq = rec.seq().to_vec();
-                if seq.len() < MIN_READ_LENGTH{
+                if *fl16s_clone{
+                    if seq.len() < 1300 || seq.len() > 1700{
+                        continue;
+                    }
+                }
+                else if seq.len() < MIN_READ_LENGTH {
                     continue;
                 }
                 let id = String::from_utf8_lossy(rec.id()).to_string();
