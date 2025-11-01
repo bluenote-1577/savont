@@ -3,7 +3,6 @@ use fastbloom::BloomFilter;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::thread;
-use crate::types::*;
 use fxhash::FxHashMap;
 use crate::seeding;
 use crate::utils::*;
@@ -47,7 +46,8 @@ pub fn read_to_split_kmers(
     let map_size_retain = vectorized_map.len();
     log::info!("Removed {} kmers with counts < 1 in both strands and <= 3 multiplicity.", map_size_raw - map_size_retain);
     if map_size_retain < map_size_raw / 1000 {
-        log::warn!("Less than 0.1% of kmers have counts > 1 in both strands and > 2 multiplicity. This may indicate a problem with the input data or very low coverage.");
+        log::error!("Less than 0.1% of kmers have counts > 1 in both strands and > 2 multiplicity. This may indicate a problem with the input data or very low coverage. Consider using --single-strand");
+        std::process::exit(1);
     }
     log::debug!("Final Hashmap len after vectorization: {}", map_size_retain);
     log_memory_usage(false, "Memory usage after second round of k-mer counting processing");

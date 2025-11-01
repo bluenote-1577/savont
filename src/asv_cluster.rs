@@ -1,8 +1,9 @@
 use crate::cli::Cli;
+use std::sync::{Arc, Mutex};
+use rayon::prelude::*;
 use crate::types::*;
 use fxhash::FxHashMap;
 use std::collections::HashMap;
-use std::hash::Hash;
 use std::io::Write;
 use std::path::PathBuf;
 
@@ -228,20 +229,15 @@ pub fn cluster_reads_by_snpmers(
 
     let k = args.kmer_size;
 
-    // Global cluster assignment: read_id -> snpmer_representative_read_id
-    let mut snpmer_cluster_assignment: HashMap<usize, usize> = HashMap::new();
-    let mut local_clusters_map: FxHashMap<usize, Vec<Vec<usize>>> = FxHashMap::default();
+    // Shared data structures wrapped in Arc<Mutex<>> for thread safety
+    let snpmer_cluster_assignment = Arc::new(Mutex::new(HashMap::new()));
+    let local_clusters_map = Arc::new(Mutex::new(FxHashMap::default()));
 
-    let cluster_file = output_dir.join("snpmer_clusters.tsv");
-    let mut writer = std::io::BufWriter::new(std::fs::File::create(&cluster_file).unwrap());
-
-    writeln!(writer, "kmer_cluster_id\tsnpmer_cluster_id\tsize\trepresentative\tmembers").unwrap();
-
-
-    // Process each k-mer cluster independently
-    for (kmer_cluster_id, kmer_cluster) in kmer_clusters.iter().enumerate() {
+    // Process each k-mer cluster independently in parallel
+    kmer_clusters.par_iter().enumerate().for_each(|(kmer_cluster_id, kmer_cluster)| {
+         // Skip empty k-mer clusters
         if kmer_cluster.len() < 1 {
-            continue;
+            return;
         }
 
         // SNPmer inverted index for this k-mer cluster: splitmer -> Vec<(read_id, full_kmer)>
@@ -298,14 +294,12 @@ pub fn cluster_reads_by_snpmers(
                 continue;
             }
             cluster_map.entry(*rep_id).or_insert_with(Vec::new).push(*rep_id);
-            snpmer_cluster_assignment.insert(*read_id, *rep_id);
         }
         for (read_id, rep_id) in local_assignment.iter() {
             if read_id == rep_id {
                 continue;
             }
             cluster_map.entry(*rep_id).or_insert_with(Vec::new).push(*read_id);
-            snpmer_cluster_assignment.insert(*read_id, *rep_id);
         }
 
         let mut local_clusters: Vec<Vec<usize>> = cluster_map.into_values().collect();
@@ -313,8 +307,45 @@ pub fn cluster_reads_by_snpmers(
 
         local_clusters.retain(|cluster| cluster.len() >= args.min_cluster_size);
 
-        // Write SNPmer subclusters for this k-mer cluster
-        for (local_snpmer_id, snpmer_cluster) in local_clusters.iter().enumerate() {
+        // Update shared data structures
+        {
+            let mut assignment = snpmer_cluster_assignment.lock().unwrap();
+            for (read_id, rep_id) in local_assignment.iter() {
+                assignment.insert(*read_id, *rep_id);
+            }
+        }
+
+        {
+            let mut clusters_map = local_clusters_map.lock().unwrap();
+            clusters_map.entry(kmer_cluster_id).or_insert_with(Vec::new).extend(local_clusters);
+        }
+
+
+        if kmer_cluster_id % 100 == 0 && kmer_cluster_id > 0 {
+            log::debug!(
+                "Processed {} / {} k-mer clusters for SNPmer clustering",
+                kmer_cluster_id,
+                kmer_clusters.len()
+            );
+        }
+    });
+
+    // Extract data from Arc after parallel processing
+    let local_clusters_map = Arc::try_unwrap(local_clusters_map)
+        .unwrap()
+        .into_inner()
+        .unwrap();
+
+    // Write SNPmer clusters to TSV file
+    let cluster_file = output_dir.join("snpmer_clusters.tsv");
+    let mut writer = std::io::BufWriter::new(std::fs::File::create(&cluster_file).unwrap());
+    writeln!(writer, "kmer_cluster_id\tsnpmer_cluster_id\tsize\trepresentative\tmembers").unwrap();
+
+    for (kmer_cluster_id, snpmer_clusters) in local_clusters_map.iter() {
+        for (local_snpmer_id, snpmer_cluster) in snpmer_clusters.iter().enumerate() {
+            if snpmer_cluster.is_empty() {
+                continue;
+            }
             let representative = snpmer_cluster[0];
             writeln!(
                 writer,
@@ -326,29 +357,19 @@ pub fn cluster_reads_by_snpmers(
                 snpmer_cluster.iter().map(|x| x.to_string()).collect::<Vec<_>>().join(",")
             ).unwrap();
         }
-
-        local_clusters_map.entry(kmer_cluster_id).or_insert_with(Vec::new).extend(local_clusters);
-
-
-        if kmer_cluster_id % 100 == 0 && kmer_cluster_id > 0 {
-            log::debug!(
-                "Processed {} / {} k-mer clusters for SNPmer clustering",
-                kmer_cluster_id,
-                kmer_clusters.len()
-            );
-        }
     }
+
+    log::info!("Wrote SNPmer clusters to {}", cluster_file.display());
 
     let recluster = true;
     let local_clusters_all: Vec<Vec<usize>>;
-    if recluster{
+    if recluster {
         local_clusters_all = recluster_using_consensus_reps(
-        local_clusters_map,
-        twin_reads,
-        args,
-    );
-    }
-    else{
+            local_clusters_map,
+            twin_reads,
+            args,
+        );
+    } else {
         // Flatten all local clusters into a single list
         let mut all_clusters: Vec<Vec<usize>> = Vec::new();
         for (_kmer_cluster_id, snpmer_clusters) in local_clusters_map {
@@ -362,7 +383,6 @@ pub fn cluster_reads_by_snpmers(
         // Sort by size descending
         all_clusters.sort_by(|a, b| b.len().cmp(&a.len()));
         local_clusters_all = all_clusters;
-        
     }
 
     log::info!(
@@ -370,7 +390,6 @@ pub fn cluster_reads_by_snpmers(
         local_clusters_all.len(),
         kmer_clusters.len()
     );
-    log::info!("Wrote SNPmer clusters to {}", cluster_file.display());
 
     let final_file = output_dir.join("final_clusters.tsv");
     let mut writer = std::io::BufWriter::new(std::fs::File::create(&final_file).unwrap());
@@ -454,7 +473,6 @@ fn compare_consensus_snpmers(
 
     let mut matches = 0;
     let mut mismatches = 0;
-    let mut mismatch_snpmers = Vec::new();
 
     // Check each SNPmer in consensus1
     for cs1 in consensus1 {
@@ -464,22 +482,9 @@ fn compare_consensus_snpmers(
                 matches += 1;
             } else {
                 mismatches += 1;
-                mismatch_snpmers.push((
-                    decode_kmer48(cs1.kmer, 21),
-                    decode_kmer48(cs2.kmer, 21),
-                    cs1.count,
-                    cs2.count
-                ));
             }
         }
     }
-
-    log::trace!(
-        "Comparing consensus SNPmers: {} matches, {} mismatches, snpmer: {:?}",
-        matches,
-        mismatches,
-        mismatch_snpmers
-    );
 
     (matches, mismatches)
 }
@@ -521,11 +526,12 @@ fn reassign_reads_to_best_cluster(
     let mask = !(3 << (k - 1));
 
     // Create new cluster assignments
-    let mut new_clusters: Vec<Vec<usize>> = vec![Vec::new(); current_clusters.len()];
-    let mut num_reassignments = 0;
+    let new_clusters: Mutex<Vec<Vec<usize>>> = Mutex::new(vec![Vec::new(); current_clusters.len()]);
+    let num_reassignments = Mutex::new(0);
 
     // For each cluster, check each read
-    for (cluster_idx, cluster) in current_clusters.iter().enumerate() {
+    //for (cluster_idx, cluster) in current_clusters.iter().enumerate() {
+    current_clusters.par_iter().enumerate().for_each(|(cluster_idx, cluster)| {
         for &read_id in cluster {
             let read_snpmers = twin_reads[read_id].snpmers_vec();
 
@@ -561,20 +567,22 @@ fn reassign_reads_to_best_cluster(
             }
 
             // Assign read to best cluster
-            new_clusters[best_cluster].push(read_id);
+            new_clusters.lock().unwrap()[best_cluster].push(read_id);
 
             if best_cluster != cluster_idx {
-                num_reassignments += 1;
+                *num_reassignments.lock().unwrap() += 1;
                 log::trace!(
                     "Reassigned read {} from cluster {} to cluster {} (mismatches: {}, matches: {})",
                     read_id, cluster_idx, best_cluster, best_score.0, best_score.1
                 );
             }
         }
-    }
+    });
 
     // Remove empty clusters
+    let mut new_clusters = new_clusters.into_inner().unwrap();
     new_clusters.retain(|cluster| !cluster.is_empty());
+    let num_reassignments = num_reassignments.into_inner().unwrap();
 
     log::debug!("Reassignment complete: {} reads reassigned to better clusters", num_reassignments);
 
@@ -588,7 +596,7 @@ fn recluster_one_round(
     twin_reads: &[TwinRead],
     k: usize,
 ) -> (Vec<Vec<usize>>, usize) {
-    // Build consensus representatives for each cluster
+    // Build consensus representatives for each cluster ONCE before the loop
     let mut all_clusters: Vec<(Vec<usize>, Vec<ConsensusSnpmer>)> = Vec::new();
 
     for cluster in current_clusters {
@@ -605,6 +613,7 @@ fn recluster_one_round(
 
     // Merge clusters with concordant consensus representatives
     let mut cluster_merged: Vec<bool> = vec![false; all_clusters.len()];
+    let mut cluster_needs_consensus_rebuild: Vec<bool> = vec![false; all_clusters.len()];
     let mut merged_clusters: Vec<Vec<usize>> = Vec::new();
     let mut num_merges = 0;
 
@@ -613,14 +622,20 @@ fn recluster_one_round(
             continue;
         }
 
+        // If this cluster was merged into in a previous iteration, rebuild its consensus
+        if cluster_needs_consensus_rebuild[i] {
+            all_clusters[i].1 = build_consensus_snpmers(&all_clusters[i].0, twin_reads, k);
+            cluster_needs_consensus_rebuild[i] = false;
+        }
+
         // Try to merge smaller clusters into this one
-        for j in (i + 1)..all_clusters.len() {
+        for j in i + 1..all_clusters.len() {
             if cluster_merged[j] {
                 continue;
             }
 
             // Check if consensus representatives are concordant (bidirectional)
-            // Need to borrow separately to satisfy borrow checker
+            // Use the pre-built consensus from the beginning of the function
             let concordant = {
                 let consensus_i = &all_clusters[i].1;
                 let consensus_j = &all_clusters[j].1;
@@ -633,14 +648,14 @@ fn recluster_one_round(
                 let old_size = all_clusters[i].0.len();
                 let cluster_j_size = all_clusters[j].0.len();
 
-                // Clone cluster_j data before modifying all_clusters[i]
-                let cluster_j_data = all_clusters[j].0.clone();
+                // Clone cluster j's reads first to avoid borrow checker issues
+                let cluster_j_reads = all_clusters[j].0.clone();
 
-                // Now extend cluster i with cluster j's reads
-                all_clusters[i].0.extend_from_slice(&cluster_j_data);
+                // Extend cluster i with cluster j's reads
+                all_clusters[i].0.extend(cluster_j_reads);
 
-                // Rebuild consensus for cluster i with the merged reads
-                all_clusters[i].1 = build_consensus_snpmers(&all_clusters[i].0, twin_reads, k);
+                // Mark that cluster i needs consensus rebuild (will be done before next comparison)
+                cluster_needs_consensus_rebuild[i] = true;
 
                 cluster_merged[j] = true;
                 num_merges += 1;
@@ -648,13 +663,17 @@ fn recluster_one_round(
                     "Merged cluster {} (size {}) into cluster {} (old size: {}, new size: {})",
                     j, cluster_j_size, i, old_size, all_clusters[i].0.len()
                 );
-            }
-            else{
+            } else {
                 log::trace!(
                     "Clusters {} and {} not concordant, not merging",
                     i, j
                 );
             }
+        }
+
+        // Rebuild consensus one final time if any merges happened for cluster i
+        if cluster_needs_consensus_rebuild[i] {
+            all_clusters[i].1 = build_consensus_snpmers(&all_clusters[i].0, twin_reads, k);
         }
 
         merged_clusters.push(all_clusters[i].0.clone());
@@ -686,13 +705,15 @@ pub fn recluster_using_consensus_reps(
     let mut iteration = 0;
     loop {
         iteration += 1;
-        let mut total_merges = 0;
-        let mut total_reassignments = 0;
+        let total_merges = Mutex::new(0);
+        let total_reassignments = Mutex::new(0);
 
-        let mut new_clusters: FxHashMap<usize, Vec<Vec<usize>>> = FxHashMap::default();
+        let new_clusters: Mutex<FxHashMap<usize, Vec<Vec<usize>>>> = Mutex::new(FxHashMap::default());
+
 
         // Process each k-mer group independently
-        for (kmer_cluster_id, snpmer_clusters) in current_clusters {
+        //for (kmer_cluster_id, snpmer_clusters) in current_clusters {
+        current_clusters.into_par_iter().for_each(|(kmer_cluster_id, snpmer_clusters)| {
             log::debug!("Processing k-mer group {} with {} SNPmer clusters", kmer_cluster_id, snpmer_clusters.len());
 
             // Step 2a: Merge clusters within this group
@@ -702,7 +723,7 @@ pub fn recluster_using_consensus_reps(
                 k
             );
 
-            total_merges += num_merges;
+            *total_merges.lock().unwrap() += num_merges;
 
             // Step 2b: Reassign reads to best matching clusters within this group
             let (reassigned_clusters, num_reassignments) = reassign_reads_to_best_cluster(
@@ -711,13 +732,17 @@ pub fn recluster_using_consensus_reps(
                 k
             );
 
-            total_reassignments += num_reassignments;
+            *total_reassignments.lock().unwrap() += num_reassignments;
 
             // Store the updated clusters for this k-mer group
             if !reassigned_clusters.is_empty() {
-                new_clusters.insert(kmer_cluster_id, reassigned_clusters);
+                new_clusters.lock().unwrap().insert(kmer_cluster_id, reassigned_clusters);
             }
-        }
+        });
+
+        let new_clusters = new_clusters.into_inner().unwrap();
+        let total_merges = total_merges.into_inner().unwrap();
+        let total_reassignments = total_reassignments.into_inner().unwrap();
 
         log::info!(
             "Iteration {}: {} total merges, {} total reassignments across {} k-mer groups",

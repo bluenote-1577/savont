@@ -120,10 +120,16 @@ impl ConsensusSnpmer {
 /// Contains the consensus sequence and the number of reads used to generate it
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConsensusSequence {
-    /// The consensus sequence
+    /// The HPC consensus sequence
     pub sequence: Vec<u8>,
+    /// The homopolymer lengths corresponding to each base in sequence
+    pub hp_lengths: Vec<u8>,
+    /// The decompressed sequence (for merging and chimera detection)
+    pub decompressed_sequence: Option<Vec<u8>>,
     /// The depth (number of reads) used to generate this consensus
     pub depth: usize,
+
+    pub appended_depth: usize,
 
     pub cluster: Vec<usize>,
 
@@ -133,8 +139,33 @@ pub struct ConsensusSequence {
 }
 
 impl ConsensusSequence {
-    pub fn new(sequence: Vec<u8>, depth: usize, id: usize, cluster: Vec<usize>) -> Self {
-        Self { sequence, depth, low_quality_positions: Vec::new(), cluster, id }
+    pub fn new(sequence: Vec<u8>, hp_lengths: Vec<u8>, depth: usize, id: usize, cluster: Vec<usize>) -> Self {
+        Self {
+            sequence,
+            hp_lengths,
+            decompressed_sequence: None,
+            depth,
+            appended_depth: 0,
+            low_quality_positions: Vec::new(),
+            cluster,
+            id
+        }
+    }
+
+    /// Decompress the HPC sequence and store it
+    pub fn decompress(&mut self) {
+        self.decompressed_sequence = Some(crate::utils::homopolymer_decompress(&self.sequence, &self.hp_lengths));
+        let first_no_n = self.decompressed_sequence.as_ref().unwrap().iter().position(|&b| b != b'N').unwrap_or(0);
+        let last_no_n = self.decompressed_sequence.as_ref().unwrap().iter().rposition(|&b| b != b'N').unwrap_or(self.decompressed_sequence.as_ref().unwrap().len() -1);
+        self.decompressed_sequence = Some(self.decompressed_sequence.as_ref().unwrap()[first_no_n..=last_no_n].to_vec());
+    }
+
+    /// Get the decompressed sequence, decompressing if needed
+    pub fn get_decompressed(&mut self) -> &Vec<u8> {
+        if self.decompressed_sequence.is_none() {
+            self.decompress();
+        }
+        self.decompressed_sequence.as_ref().unwrap()
     }
 }
 

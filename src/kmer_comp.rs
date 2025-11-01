@@ -51,7 +51,7 @@ pub fn twin_reads_from_snpmers(kmer_info: &mut KmerGlobalInfo, args: &Cli) -> Ve
 
     let snpmer_set = Arc::new(snpmer_set);
     let twin_read_vec = Arc::new(Mutex::new(vec![]));
-    let fl16s = args.full_length_16s;
+    let fl16s = !args.not_full_16s;
 
     let files_owned = fastq_files.clone();
     let solid_kmers_take = std::mem::take(&mut kmer_info.solid_kmers);
@@ -71,7 +71,7 @@ pub fn twin_reads_from_snpmers(kmer_info: &mut KmerGlobalInfo, args: &Cli) -> Ve
                 let seq;
                 seq = rec.seq().to_vec();
                 if *fl16s_clone{
-                    if seq.len() < 1300 || seq.len() > 1700{
+                    if seq.len() < 1100 || seq.len() > 2000{
                         continue;
                     }
                 }

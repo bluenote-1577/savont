@@ -2,28 +2,22 @@ use bincode;
 use flexi_logger::style;
 use clap::Parser;
 use flexi_logger::{DeferredNow, Duplicate, FileSpec, Record};
-use fxhash::FxHashMap;
-use fxhash::FxHashSet;
 use savont::asv_cluster;
 use savont::cli;
 use savont::constants::*;
 use savont::kmer_comp;
-use savont::map_processing;
 use savont::seq_parse;
 use savont::types;
-use savont::types::HeavyCutOptions;
 use savont::alignment;
-use savont::types::OverlapAdjMap;
 use savont::utils::*;
+use savont::chimera;
 use std::fs::File;
 use std::io::BufReader;
-use std::io::BufWriter;
 use std::path::Path;
 use std::path::PathBuf;
 use std::time::Instant;
 use sysinfo::System;
 fn main() {
-    let total_start_time = Instant::now();
     let mut args = cli::Cli::parse();
 
     let output_dir = initialize_setup(&mut args);
@@ -50,16 +44,65 @@ fn main() {
     // Generate pileups for quality estimation
     let mut pileups = alignment::generate_consensus_pileups(&twin_reads, &consensuses, &args);
 
+    // Update consensus HP lengths from modal values calculated from pileups
+    log::info!("Updating consensus HP lengths from pileup alignments");
+    for (consensus, pileup) in consensuses.iter_mut().zip(pileups.iter()) {
+        // Extract modal HP lengths from pileup
+        let modal_hp_lengths: Vec<u8> = pileup.iter().map(|p| p.ref_hp_length).collect();
+        consensus.hp_lengths = modal_hp_lengths;
+    }
+
     // Estimate quality error rates from top 10% of clusters
     let quality_error_map = alignment::estimate_quality_error_rates(&pileups, &consensuses, 0.1);
 
     // Polish consensus sequences using Bayesian inference
-    alignment::polish_consensuses(&mut pileups, &mut consensuses, &quality_error_map, &args);
+    let mut low_qual_consensus = alignment::polish_consensuses(&mut pileups, &mut consensuses, &quality_error_map, &twin_reads, &args);
     log_memory_usage(true, "STAGE 1.9: Polished consensus sequences");
 
-    // Merge similar consensus sequences based on alignment and depth
-    let consensuses = alignment::merge_similar_consensuses(&twin_reads, consensuses, &args);
+    // Decompress HPC sequences before merging and chimera detection
+    log::info!("Decompressing {} HPC consensus sequences for merging and chimera detection", consensuses.len());
+    for consensus in &mut consensuses {
+        consensus.decompress();
+    }
+
+    // Decompress low quality consensus sequences as well
+    log::info!("Decompressing {} low quality HPC consensus sequences", low_qual_consensus.len());
+    for consensus in &mut low_qual_consensus {
+        consensus.decompress();
+    }
+
+    alignment::write_consensus_fasta(&low_qual_consensus, &output_dir.join("low_quality_consensus_sequences.fasta"), "lowqual")
+        .expect("Failed to write low_quality_consensus_sequences.fasta");
+
+    // Merge similar consensus sequences based on alignment and depth (using decompressed sequences)
+    // This also merges low quality consensuses into high quality ones
+    let consensuses = alignment::merge_similar_consensuses(&twin_reads, consensuses, low_qual_consensus, &args);
     log_memory_usage(true, "STAGE 2: Merged similar consensus sequences");
+
+    // Detect and filter chimeric consensus sequences
+    if args.skip_chimera_detection {
+        log::info!("Skipping chimera detection as per user request.");
+        log_memory_usage(true, "STAGE 2.5: Skipped chimera detection");
+        return;
+    }
+    let chimeras = chimera::detect_chimeras(&consensuses, &args);
+    let consensuses = chimera::filter_chimeras(consensuses, &chimeras);
+    log_memory_usage(true, "STAGE 2.5: Filtered chimeric consensus sequences");
+
+    log::info!("Final consensus count after all filtering: {}", consensuses.len());
+
+    // Write final consensus sequences after chimera filtering
+    let output_dir = std::path::PathBuf::from(&args.output_dir);
+    let final_fasta = output_dir.join("final_consensus_sequences.fasta");
+    alignment::write_consensus_fasta(&consensuses, &final_fasta, "final")
+        .expect("Failed to write final_consensus_sequences.fasta");
+    log::info!("Wrote {} final consensus sequences to final_consensus_sequences.fasta", consensuses.len());
+
+    // Write final cluster information
+    let final_clusters = output_dir.join("final_clusters.tsv");
+    alignment::write_clusters_tsv(&consensuses, &twin_reads, &final_clusters, "final")
+        .expect("Failed to write final_clusters.tsv");
+    log::info!("Wrote final cluster information to final_clusters.tsv");
 }
 
 fn my_own_format_colored(
@@ -129,26 +172,19 @@ fn initialize_setup(args: &mut cli::Cli) -> PathBuf {
         }
     }
 
-    let binary_temp_dir = output_dir.join("binary_temp");
-    if !binary_temp_dir.exists(){
-        std::fs::create_dir_all(&binary_temp_dir).expect("Could not create temp directory for binary files");
-    } else {
-        if !binary_temp_dir.is_dir() {
-            panic!("Could not create temp directory for binary files. Exiting.");
-        }
-    }
-
     // Initialize logger with CLI-specified level
     let log_spec = format!("{},skani=info", args.log_level_filter().to_string());
     let filespec = FileSpec::default()
         .directory(output_dir)
         .basename("savont");
-    flexi_logger::Logger::try_with_str(log_spec)
+    let symlink_path = output_dir.join("savont_current.log");
+    let _logger_handle = flexi_logger::Logger::try_with_str(log_spec)
         .expect("Something went wrong with logging")
         .log_to_file(filespec) // write logs to file
         .duplicate_to_stderr(Duplicate::Info) // print warnings and errors also to the console
         .format(my_own_format_colored) // use a simple colored format
         .format_for_files(my_own_format)
+        .create_symlink(symlink_path)
         .start()
         .expect("Something went wrong with creating log file");
 
@@ -210,14 +246,6 @@ fn get_kmers_and_snpmers(args: &cli::Cli, output_dir: &PathBuf) -> types::KmerGl
             "Time elapsed in for parsing snpmers is: {:?}",
             start.elapsed()
         );
-
-        if !args.clean_dir{
-            bincode::serialize_into(
-                BufWriter::new(File::create(snpmer_info_path).unwrap()),
-                &kmer_info,
-            )
-            .unwrap();
-        }
     }
     return kmer_info;
 }
@@ -225,12 +253,11 @@ fn get_kmers_and_snpmers(args: &cli::Cli, output_dir: &PathBuf) -> types::KmerGl
 fn get_twin_reads_from_kmer_info(
     kmer_info: &mut types::KmerGlobalInfo,
     args: &cli::Cli,
-    output_dir: &PathBuf,
-    cleaning_temp_dir: &PathBuf,
+    _output_dir: &PathBuf,
+    _cleaning_temp_dir: &PathBuf,
 ) -> Vec<types::TwinRead>{
     log::info!("Getting twin reads from snpmers...");
     let mut twin_reads_raw = kmer_comp::twin_reads_from_snpmers(kmer_info, &args);
     twin_reads_raw.sort_by(|a,b| b.est_id.unwrap_or(100.0).partial_cmp(&a.est_id.unwrap_or(100.0)).unwrap());
-    log_memory_usage(true, "STAGE 1.5: Initially obtained dirty twin reads");
     return twin_reads_raw;
 }
