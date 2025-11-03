@@ -11,6 +11,8 @@ pub mod utils;
 pub mod asv_cluster;
 pub mod alignment;
 pub mod chimera;
+pub mod taxonomy;
+pub mod classify;
 
 //pub mod cbloom;
 //

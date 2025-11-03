@@ -1,4 +1,4 @@
-use crate::cli::Cli;
+use crate::cli::ClusterArgs as Cli;
 use std::sync::{Arc, Mutex};
 use rayon::prelude::*;
 use crate::types::*;
@@ -402,7 +402,7 @@ pub fn cluster_reads_by_snpmers(
             snpmer_rep_id,
             cluster.len(),
             representative,
-            cluster.iter().map(|x| format!("{} {}", &twin_reads[*x].id, &twin_reads[*x].est_id.unwrap())).collect::<Vec<_>>().join("\n")
+            cluster.iter().map(|x| format!("{} {}", &twin_reads[*x].id, &twin_reads[*x].est_id.unwrap_or(100.))).collect::<Vec<_>>().join("\n")
         ).unwrap();
     }
 
@@ -532,6 +532,7 @@ fn reassign_reads_to_best_cluster(
     // For each cluster, check each read
     //for (cluster_idx, cluster) in current_clusters.iter().enumerate() {
     current_clusters.par_iter().enumerate().for_each(|(cluster_idx, cluster)| {
+        let mut new_clusters_local = vec![Vec::new(); current_clusters.len()];
         for &read_id in cluster {
             let read_snpmers = twin_reads[read_id].snpmers_vec();
 
@@ -567,7 +568,8 @@ fn reassign_reads_to_best_cluster(
             }
 
             // Assign read to best cluster
-            new_clusters.lock().unwrap()[best_cluster].push(read_id);
+            //new_clusters.lock().unwrap()[best_cluster].push(read_id);
+            new_clusters_local[best_cluster].push(read_id);
 
             if best_cluster != cluster_idx {
                 *num_reassignments.lock().unwrap() += 1;
@@ -576,6 +578,12 @@ fn reassign_reads_to_best_cluster(
                     read_id, cluster_idx, best_cluster, best_score.0, best_score.1
                 );
             }
+        }
+
+        // Merge local new clusters into global new clusters
+        let mut global_clusters = new_clusters.lock().unwrap();
+        for (i, cluster) in new_clusters_local.into_iter().enumerate() {
+            global_clusters[i].extend(cluster);
         }
     });
 
@@ -724,6 +732,7 @@ pub fn recluster_using_consensus_reps(
             );
 
             *total_merges.lock().unwrap() += num_merges;
+            log::debug!("Processing k-mer group {} --- merged", kmer_cluster_id);
 
             // Step 2b: Reassign reads to best matching clusters within this group
             let (reassigned_clusters, num_reassignments) = reassign_reads_to_best_cluster(
@@ -738,6 +747,7 @@ pub fn recluster_using_consensus_reps(
             if !reassigned_clusters.is_empty() {
                 new_clusters.lock().unwrap().insert(kmer_cluster_id, reassigned_clusters);
             }
+            log::debug!("Processing k-mer group {} --- done", kmer_cluster_id);
         });
 
         let new_clusters = new_clusters.into_inner().unwrap();

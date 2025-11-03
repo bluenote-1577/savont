@@ -1,4 +1,4 @@
-use crate::cli::Cli;
+use crate::cli::ClusterArgs as Cli;
 use crate::constants::FORWARD_READ_SAFE_SEARCH_CUTOFF;
 use crate::constants::ID_THRESHOLD_ITERS;
 use crate::constants::PSEUDOCOUNT;

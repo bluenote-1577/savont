@@ -1,4 +1,4 @@
-use crate::cli::Cli;
+use crate::cli::ClusterArgs as Cli;
 use crate::constants::GAPS;
 use crate::constants::SUB_MATRIX;
 use crate::types::*;

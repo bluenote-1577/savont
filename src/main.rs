@@ -6,11 +6,13 @@ use savont::asv_cluster;
 use savont::cli;
 use savont::constants::*;
 use savont::kmer_comp;
+use savont::classify;
 use savont::seq_parse;
 use savont::types;
 use savont::alignment;
 use savont::utils::*;
 use savont::chimera;
+use savont::taxonomy;
 use std::fs::File;
 use std::io::BufReader;
 use std::path::Path;
@@ -18,11 +20,22 @@ use std::path::PathBuf;
 use std::time::Instant;
 use sysinfo::System;
 fn main() {
-    let mut args = cli::Cli::parse();
+    let args = cli::Cli::parse();
 
-    let output_dir = initialize_setup(&mut args);
+    match &args.command {
+        cli::Commands::Cluster(cluster_args) => {
+            run_cluster(cluster_args, &args);
+        }
+        cli::Commands::Classify(classify_args) => {
+            run_classify(classify_args, &args);
+        }
+    }
+}
 
-    log::info!("Starting assembly...");
+fn run_cluster(args: &cli::ClusterArgs, cli_args: &cli::Cli) {
+    let output_dir = initialize_setup_cluster(args, cli_args);
+
+    log::info!("Starting clustering...");
 
     // Step 1: Process k-mers, count k-mers, and get SNPmers
     let mut kmer_info = get_kmers_and_snpmers(&args, &output_dir);
@@ -93,10 +106,10 @@ fn main() {
 
     // Write final consensus sequences after chimera filtering
     let output_dir = std::path::PathBuf::from(&args.output_dir);
-    let final_fasta = output_dir.join("final_consensus_sequences.fasta");
+    let final_fasta = output_dir.join(ASV_FILE);
     alignment::write_consensus_fasta(&consensuses, &final_fasta, "final")
-        .expect("Failed to write final_consensus_sequences.fasta");
-    log::info!("Wrote {} final consensus sequences to final_consensus_sequences.fasta", consensuses.len());
+        .expect(format!("Failed to write {}", ASV_FILE).as_str());
+    log::info!("Wrote {} final consensus sequences to {}", consensuses.len(), ASV_FILE);
 
     // Write final cluster information
     let final_clusters = output_dir.join("final_clusters.tsv");
@@ -104,6 +117,77 @@ fn main() {
         .expect("Failed to write final_clusters.tsv");
     log::info!("Wrote final cluster information to final_clusters.tsv");
 }
+
+fn run_classify(args: &cli::ClassifyArgs, cli_args: &cli::Cli) {
+    // Initialize output directory and logger
+    let _output_dir = initialize_setup_classify(args, cli_args);
+
+    log::info!("Starting classification...");
+    let db;
+    if let Some(db_path) = &args.db_type.emu_db {
+        log::info!("Using EMU database at {}", db_path);
+        db = taxonomy::Database::load_emu(Path::new(db_path))
+            .expect("Failed to load EMU database");
+    }
+    else if let Some(silva_path) = &args.db_type.silva_db {
+        log::info!("Using Silva database at {}", silva_path);
+        db = taxonomy::Database::load_silva(Path::new(silva_path))
+            .expect("Failed to load Silva database");
+    }
+    else {
+        log::error!("No database specified for classification. Use --emu-db or --silva-db.");
+        std::process::exit(1);
+
+    }
+
+    classify::classify(&args, &db);
+
+}
+
+fn initialize_setup_classify(args: &cli::ClassifyArgs, cli_args: &cli::Cli) -> PathBuf {
+    let output_dir = Path::new(&args.output_dir);
+
+    if !output_dir.exists() {
+        std::fs::create_dir_all(output_dir).expect("Could not create output directory. Exiting.");
+    } else {
+        if !output_dir.is_dir() {
+            eprintln!(
+                "ERROR [savont] Output directory specified by `-o` exists and is not a directory."
+            );
+            std::process::exit(1);
+        }
+    }
+
+    // Initialize logger
+    let log_spec = format!("{},skani=info", cli_args.log_level_filter().to_string());
+    let filespec = FileSpec::default()
+        .directory(output_dir)
+        .basename("savont_classify");
+    let _logger_handle = flexi_logger::Logger::try_with_str(log_spec)
+        .expect("Something went wrong with logging")
+        .log_to_file(filespec)
+        .duplicate_to_stderr(Duplicate::Info)
+        .format(my_own_format_colored)
+        .format_for_files(my_own_format)
+        .create_symlink("savont_classify_latest.log")
+        .start()
+        .expect("Something went wrong with creating log file");
+
+    let command_args: Vec<String> = std::env::args().collect();
+    log::info!("COMMAND: {}", command_args.join(" "));
+    log::info!("VERSION: {}", env!("CARGO_PKG_VERSION"));
+
+    // Initialize thread pool
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(args.threads)
+        .stack_size(16 * 1024 * 1024)
+        .build_global()
+        .unwrap();
+
+    output_dir.to_path_buf()
+}
+
+
 
 fn my_own_format_colored(
     w: &mut dyn std::io::Write,
@@ -139,7 +223,7 @@ fn my_own_format(
     )
 }
 
-fn initialize_setup(args: &mut cli::Cli) -> PathBuf {
+fn initialize_setup_cluster(args: &cli::ClusterArgs, cli_args: &cli::Cli) -> PathBuf {
 
     if args.markdown_help {
         let markdown_options = clap_markdown::MarkdownOptions::default();
@@ -173,23 +257,22 @@ fn initialize_setup(args: &mut cli::Cli) -> PathBuf {
     }
 
     // Initialize logger with CLI-specified level
-    let log_spec = format!("{},skani=info", args.log_level_filter().to_string());
+    let log_spec = format!("{},skani=info", cli_args.log_level_filter().to_string());
     let filespec = FileSpec::default()
         .directory(output_dir)
         .basename("savont");
-    let symlink_path = output_dir.join("savont_current.log");
     let _logger_handle = flexi_logger::Logger::try_with_str(log_spec)
         .expect("Something went wrong with logging")
         .log_to_file(filespec) // write logs to file
         .duplicate_to_stderr(Duplicate::Info) // print warnings and errors also to the console
         .format(my_own_format_colored) // use a simple colored format
         .format_for_files(my_own_format)
-        .create_symlink(symlink_path)
+        .create_symlink("savont_latest.log")
         .start()
         .expect("Something went wrong with creating log file");
 
-    let cli_args: Vec<String> = std::env::args().collect();
-    log::info!("COMMAND: {}", cli_args.join(" "));
+    let command_args: Vec<String> = std::env::args().collect();
+    log::info!("COMMAND: {}", command_args.join(" "));
     log::info!("VERSION: {}", env!("CARGO_PKG_VERSION"));
     log::info!("SYSTEM NAME: {}", System::name().unwrap_or(format!("Unknown")));
     log::info!("SYSTEM HOST NAME: {}", System::host_name().unwrap_or(format!("Unknown")));
@@ -211,7 +294,7 @@ fn initialize_setup(args: &mut cli::Cli) -> PathBuf {
     return output_dir.to_path_buf();
 }
 
-fn get_kmers_and_snpmers(args: &cli::Cli, output_dir: &PathBuf) -> types::KmerGlobalInfo {
+fn get_kmers_and_snpmers(args: &cli::ClusterArgs, output_dir: &PathBuf) -> types::KmerGlobalInfo {
     let saved_input = args.input_files == [MAGIC_EXIST_STRING];
 
     let binary_temp_dir = output_dir.join("binary_temp");
@@ -252,7 +335,7 @@ fn get_kmers_and_snpmers(args: &cli::Cli, output_dir: &PathBuf) -> types::KmerGl
 
 fn get_twin_reads_from_kmer_info(
     kmer_info: &mut types::KmerGlobalInfo,
-    args: &cli::Cli,
+    args: &cli::ClusterArgs,
     _output_dir: &PathBuf,
     _cleaning_temp_dir: &PathBuf,
 ) -> Vec<types::TwinRead>{

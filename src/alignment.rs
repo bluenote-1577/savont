@@ -2,7 +2,7 @@ use crate::{types::*, utils};
 use crate::constants::*;
 use std::io::Write;
 use std::sync::Mutex;
-use crate::cli::Cli;
+use crate::cli::ClusterArgs as Cli;
 use std::path::PathBuf;
 use minimap2::Aligner;
 use rayon::prelude::*;
@@ -754,7 +754,7 @@ pub fn write_clusters_tsv(
             cluster_id,
             cluster.len(),
             representative,
-            cluster.iter().map(|x| format!("{} {}", &twin_reads[*x].id, &twin_reads[*x].est_id.unwrap())).collect::<Vec<_>>().join("\n")
+            cluster.iter().map(|x| format!("{} {}", &twin_reads[*x].id, &twin_reads[*x].est_id.unwrap_or(100.))).collect::<Vec<_>>().join("\n")
         )?;
     }
 
@@ -1024,9 +1024,9 @@ pub fn polish_consensuses(
         .expect("Failed to write clusters_before_quality_filter.tsv");
     log::info!("Wrote cluster information before filtering to clusters_before_quality_filter.tsv");
 
-    let low_quality_consensuses = consensuses.iter().filter(|c| c.low_quality_positions.len() > 1).map(|c| c.clone()).collect::<Vec<_>>();
+    let low_quality_consensuses = consensuses.iter().filter(|c| lq_criteria(c)).map(|c| c.clone()).collect::<Vec<_>>();
     log::info!("Low quality consensus sequences: {:?}", &low_quality_consensuses.iter().map(|c| c.id).collect::<Vec<_>>());
-    consensuses.retain(|c| c.low_quality_positions.len() <= 1);
+    consensuses.retain(|c| !lq_criteria(c));
 
     log::info!("Polishing complete");
 
@@ -1035,6 +1035,11 @@ pub fn polish_consensuses(
 
 
     return low_quality_consensuses;
+}
+
+fn lq_criteria(consensus: &ConsensusSequence) -> bool {
+    (consensus.low_quality_positions.len() > 0) && 
+    (consensus.depth / ((consensus.low_quality_positions.len() * consensus.low_quality_positions.len())) < 250)
 }
 
 /// Merge similar consensus sequences based on alignment and depth criteria
@@ -1106,11 +1111,9 @@ pub fn merge_similar_consensuses(
     let mut consensuses = consensuses;
 
     for (query_idx, target_idx) in low_qual_mappings {
-        if target_idx < consensuses.len() {
-            // Merge the clusters
-            let low_qual_consensus = &low_qual_consensuses[query_idx];
-            consensuses[target_idx].appended_depth += low_qual_consensus.depth;
-        }
+        // Merge the clusters
+        let low_qual_consensus = &low_qual_consensuses[query_idx];
+        consensuses[target_idx].appended_depth += low_qual_consensus.depth;
     }
 
     // Align all consensus sequences to each other in parallel (using decompressed sequences)

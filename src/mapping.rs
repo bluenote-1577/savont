@@ -1,4 +1,4 @@
-use crate::cli::Cli;
+use crate::cli::ClusterArgs as Cli;
 use crate::constants::IDENTITY_THRESHOLDS;
 use crate::constants::ID_THRESHOLD_ITERS;
 use crate::constants::MAX_ALLOWABLE_SNPMER_ERROR_MISC;

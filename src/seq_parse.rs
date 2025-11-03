@@ -1,4 +1,4 @@
-use crate::cli::Cli;
+use crate::cli::ClusterArgs as Cli;
 use fastbloom::BloomFilter;
 use std::sync::Arc;
 use std::sync::Mutex;

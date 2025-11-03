@@ -1,17 +1,37 @@
-use clap::{Parser, ValueEnum};
+use clap::{Parser, Subcommand, ValueEnum, Args};
 use crate::constants::CLI_HEADINGS;
 
 #[derive(Parser, Debug)]
 #[command(
     name = "savont",
-    about =
-    "savont - high-resolution 16S rRNA clustering and denoising for long-read metagenomic data\n\nEXAMPLE: savont reads.fq.gz -o output_directory -t 50",
+    about = "savont - high-resolution 16S rRNA clustering and denoising for long-read metagenomic data",
     version,
-    author
-)]
+    author,
+    disable_help_subcommand = true,
 
-#[derive(Default, Clone)]
+)]
 pub struct Cli {
+    #[command(subcommand)]
+    pub command: Commands,
+
+    /// Logging verbosity level
+    #[arg(short, long, value_enum, default_value = "debug", global = true)]
+    pub log_level: LogLevel,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum Commands {
+    /// Cluster reads into ASVs (Amplicon Sequence Variants)
+    #[command(name = "asv")]
+    Cluster(ClusterArgs),
+
+    /// Classify ASVs against a reference database and generate taxonomy abundance table
+    #[command(name = "classify")]
+    Classify(ClassifyArgs),
+}
+
+#[derive(Parser, Debug, Clone)]
+pub struct ClusterArgs {
     /// Input read file(s) in FASTQ or FASTA format (.gz supported). Multiple files are concatenated.
     #[arg(num_args = 1.., required = true, value_name = "FASTQ/FASTA")]
     pub input_files: Vec<String>,
@@ -41,7 +61,7 @@ pub struct Cli {
     pub min_cluster_size: usize,
 
     /// Minimum estimated read accuracy (%) to include in clustering
-    #[arg(long, default_value_t=99., help_heading = CLI_HEADINGS[1])]
+    #[arg(long, default_value_t=98., help_heading = CLI_HEADINGS[1])]
     pub quality_value_cutoff: f64,
 
     /// Bloom filter size in GB for k-mer filtering (0 = auto, increase for very large datasets)
@@ -51,10 +71,6 @@ pub struct Cli {
     /// Use more aggressive k-mer filtering (faster but may be non-deterministic)
     #[arg(long, help_heading = CLI_HEADINGS[1], hide = true)]
     pub aggressive_bloom: bool,
-
-    /// Logging verbosity level
-    #[arg(short, long, value_enum, default_value = "debug")]
-    pub log_level: LogLevel,
 
     /// Skip chimera detection step (not recommended)
     #[arg(long)]
@@ -79,6 +95,44 @@ pub struct Cli {
     /// Do not assume 16S full-length reads
     #[arg(long, help_heading = CLI_HEADINGS[2])]
     pub not_full_16s: bool,
+}
+
+#[derive(Parser, Debug, Clone)]
+pub struct ClassifyArgs {
+    /// Directory containing clustering results
+    #[arg(short, long, required = true)]
+    pub input_dir: String,
+
+    /// Output directory for classification results
+    #[arg(short, long, default_value = "savont-classify-out")]
+    pub output_dir: String,
+
+    #[command(flatten)]
+    pub db_type: DatabaseType,
+
+    /// Number of threads to use for parallel processing
+    #[arg(short, long, default_value = "20")]
+    pub threads: usize,
+
+    /// Minimum identity threshold for species-level classification (default: 99%)
+    #[arg(long, default_value_t = 99.0)]
+    pub species_threshold: f64,
+
+    /// Minimum identity threshold for genus-level classification (default: 94.5%)
+    #[arg(long, default_value_t = 94.5)]
+    pub genus_threshold: f64,
+}
+
+#[derive(Args, Debug, Clone)]
+#[group(required = true, multiple = false)]
+pub struct DatabaseType {
+    /// Emu database path
+    #[arg(long, help_heading = "Database")]
+    pub emu_db: Option<String>,
+
+    /// SILVA database path
+    #[arg(long, help_heading = "Database")]
+    pub silva_db: Option<String>,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, ValueEnum)]

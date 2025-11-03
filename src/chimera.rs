@@ -1,5 +1,5 @@
 use crate::types::*;
-use crate::cli::Cli;
+use crate::cli::ClusterArgs as Cli;
 use crate::utils;
 use minimap2::{Aligner, Strand};
 use rayon::prelude::*;

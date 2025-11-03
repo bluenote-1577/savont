@@ -1,4 +1,4 @@
-use crate::cli::Cli;
+use crate::cli::ClusterArgs as Cli;
 use crate::constants::QUALITY_SEQ_BIN;
 use crate::constants::READ_BLOCK_SIZE_FOR_COVERAGE;
 use crate::constants::ENDPOINT_MAPPING_FUZZ;

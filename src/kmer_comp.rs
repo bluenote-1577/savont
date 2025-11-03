@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use smallvec::SmallVec;
 use smallvec::smallvec;
-use crate::cli::Cli;
+use crate::cli::ClusterArgs as Cli;
 use crate::constants::MAX_KMER_COUNT_IN_READ;
 use crate::constants::MIN_READ_LENGTH;
 use crate::constants::USE_SOLID_KMERS;

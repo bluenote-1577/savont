@@ -1,5 +1,6 @@
 use block_aligner;
 
+pub const ASV_FILE: &str = "final_asvs.fasta";
 //pub const ID_CUTOFF: f64 = 0.999;
 pub const FORWARD_READ_SAFE_SEARCH_CUTOFF: usize = 10000;
 //foward_read_safe_search_cutoff: usize = 10000;

@@ -7,7 +7,7 @@ use crate::polishing::alignment;
 use crate::seeding::estimate_sequence_identity;
 use crate::types::SmallTwinOl;
 use crate::types::*;
-use crate::cli::Cli;
+use crate::cli::ClusterArgs as Cli;
 use crate::seeding;
 use bio_seq::prelude::*;
 use fxhash::FxHashSet;
