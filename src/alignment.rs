@@ -202,7 +202,7 @@ fn generate_consensus_poa(
 
     let msa_seqs = &graph.generate_msa()[0..5];
     let msa_string = msa_seqs.join("\n");
-    log::debug!("Final Consensus {} has length {} with MSA\n{}", cluster_idx, consensus.len(), msa_string);
+    log::trace!("Final Consensus {} has length {} with MSA\n{}", cluster_idx, consensus.len(), msa_string);
 
     return consensus.into_bytes();
 
@@ -285,7 +285,7 @@ pub fn align_and_consensus(twin_reads: &[TwinRead], clusters: Vec<Vec<usize>>, a
 
             let best_mapping = &mappings.first().unwrap();
             let cigar_str = &best_mapping.alignment.as_ref().unwrap().cigar_str.as_ref().unwrap();
-            log::debug!("Read {} len {}: CIGAR: {}, Query start: {}, Query end: {}, Target start: {}, Target end: {}, Cluster IDX: {}",
+            log::trace!("Read {} len {}: CIGAR: {}, Query start: {}, Query end: {}, Target start: {}, Target end: {}, Cluster IDX: {}",
             i, best_mapping.query_len.unwrap(), cigar_str, best_mapping.query_start, best_mapping.query_end, best_mapping.target_start, best_mapping.target_end, cluster_idx);
 
             let final_seq;
@@ -350,7 +350,7 @@ pub fn align_and_consensus(twin_reads: &[TwinRead], clusters: Vec<Vec<usize>>, a
         let placeholder_hp_lengths = vec![1u8; hpc_consensus_seq.len()];
         consensus_seqs.lock().unwrap().push((cluster_idx, hpc_consensus_seq.clone(), placeholder_hp_lengths, depth, cluster.clone()));
 
-        log::info!("Completed alignment for cluster of size {}", cluster.len());
+        log::debug!("Completed alignment for cluster of size {}", cluster.len());
     });
 
     let mut consensus_seqs = consensus_seqs.into_inner().unwrap();
@@ -776,7 +776,7 @@ pub fn write_consensus_fasta(
         let consensus_seq = cons_clone.decompressed_sequence.clone().unwrap();
         let start_non = consensus_seq.iter().enumerate().find(|&(_i, &b)| b != b'N').map(|(i, _)| i).unwrap_or(0);
         let end_non = consensus_seq.iter().enumerate().rfind(|&(_i, &b)| b != b'N').map(|(i, _)| i).unwrap_or(consensus_seq.len());
-        let header = format!(">{}_id_{}_consensus_{}_depth_{}", prefix, &consensus.id, i, consensus.depth + consensus.appended_depth);
+        let header = format!(">{}_consensus_{}_depth_{} debug_id:{}", prefix, i, consensus.depth + consensus.appended_depth, consensus.id);
         writeln!(writer, "{}", header)?;
 
         // Use decompressed sequence if available, otherwise use HPC sequence
@@ -796,6 +796,7 @@ pub fn polish_consensuses(
     quality_error_map: &HashMap<u8, f64>,
     twin_reads: &[TwinRead],
     args: &Cli,
+    temp_dir: &PathBuf,
 ) -> Vec<ConsensusSequence> {
     let bad_length_threshold = 100;
     let min_coverage_abs = args.min_cluster_size;
@@ -1018,8 +1019,7 @@ pub fn polish_consensuses(
     }
 
     // Write clusters before filtering out low quality consensuses
-    let output_dir = std::path::PathBuf::from(&args.output_dir);
-    let prefilter_file = output_dir.join("clusters_before_quality_filter.tsv");
+    let prefilter_file = temp_dir.join("clusters_before_quality_filter.tsv");
     write_clusters_tsv(consensuses, twin_reads, &prefilter_file, "prefilter")
         .expect("Failed to write clusters_before_quality_filter.tsv");
     log::info!("Wrote cluster information before filtering to clusters_before_quality_filter.tsv");
@@ -1050,14 +1050,14 @@ pub fn merge_similar_consensuses(
     consensuses: Vec<ConsensusSequence>,
     low_qual_consensuses: Vec<ConsensusSequence>,
     args: &Cli,
+    temp_dir: &PathBuf,
 ) -> Vec<ConsensusSequence> {
     if consensuses.is_empty() {
         return consensuses;
     }
 
     // Write polished consensus sequences to FASTA for indexing
-    let output_dir = std::path::PathBuf::from(&args.output_dir);
-    let output_fasta_path = output_dir.join("polished_consensuses.fasta");
+    let output_fasta_path = temp_dir.join("polished_consensuses.fasta");
     write_consensus_fasta(&consensuses, &output_fasta_path, "polished")
         .expect("Failed to write polished_consensuses.fasta");
     log::info!("Wrote {} polished consensus sequences to polished_consensuses.fasta", consensuses.len());
@@ -1067,7 +1067,7 @@ pub fn merge_similar_consensuses(
         .ava_ont()
         .with_index_threads(args.threads)
         .with_cigar()
-        .with_index(&format!("{}/polished_consensuses.fasta", args.output_dir), None)
+        .with_index(output_fasta_path.to_str().unwrap(), None)
         .expect("Failed to create aligner");
     
     // Store mappings: (query_idx, target_idx, nm, target_depth)
@@ -1246,7 +1246,7 @@ pub fn merge_similar_consensuses(
 
     // Perform the merges
     for (&query_idx, &target_idx) in &merged_into {
-        log::info!(
+        log::debug!(
             "Merging consensus {} (depth {}) into consensus {} (depth {})",
             consensuses[query_idx].id,
             consensuses[query_idx].depth,
@@ -1280,13 +1280,12 @@ pub fn merge_similar_consensuses(
     );
 
 
-    let output_dir = std::path::PathBuf::from(&args.output_dir);
-    let final_file = output_dir.join("final_clusters_merged.tsv");
+    let final_file = temp_dir.join("final_clusters_merged.tsv");
     write_clusters_tsv(&new_consensuses, twin_reads, &final_file, "final")
         .expect("Failed to write final_clusters_merged.tsv");
 
     // Write merged consensus sequences (before chimera filtering)
-    let merged_fasta = output_dir.join("merged_consensus_sequences.fasta");
+    let merged_fasta = temp_dir.join("merged_consensus_sequences.fasta");
     write_consensus_fasta(&new_consensuses, &merged_fasta, "merged")
         .expect("Failed to write merged_consensus_sequences.fasta");
     log::info!("Wrote {} merged consensus sequences to merged_consensus_sequences.fasta", new_consensuses.len());

@@ -13,6 +13,7 @@ pub mod alignment;
 pub mod chimera;
 pub mod taxonomy;
 pub mod classify;
+pub mod download;
 
 //pub mod cbloom;
 //

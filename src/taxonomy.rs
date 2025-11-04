@@ -205,9 +205,11 @@ impl Database {
 pub struct AsvClassification {
     pub asv_id: String,
     pub asv_header: String,
+    pub hit_reference_id: String,
     pub abundance: f64,
     pub best_hit_tax_id: Option<String>,
     pub identity: Option<f64>,
+    pub nm: Option<usize>,
     pub taxonomy: Option<TaxonomyAssignment>,
 }
 
@@ -271,7 +273,24 @@ impl TaxonomyAssignment {
                 species_subgroup: String::new(),
                 species_group: String::new(),
             }
-        } else {
+        } else if identity >= 75.0 {
+            // Family-level classification
+            Self {
+                tax_id: entry.tax_id.clone(),
+                species: unclassified_marker.clone(),
+                genus: unclassified_marker.clone(),
+                family: entry.family.clone(),
+                order: entry.order.clone(),
+                class: entry.class.clone(),
+                phylum: entry.phylum.clone(),
+                clade: entry.clade.clone(),
+                superkingdom: entry.superkingdom.clone(),
+                subspecies: String::new(),
+                species_subgroup: String::new(),
+                species_group: String::new(),
+            }
+        }
+        else {
             // Below genus threshold - unclassified
             Self {
                 tax_id: entry.tax_id.clone(),
@@ -309,8 +328,8 @@ pub fn extract_silva_accession_from_header(header: &str) -> Option<String> {
     accession_part.split('.').next().map(|s| s.to_string())
 }
 
-/// Write taxonomy abundance table to TSV file
-pub fn write_taxonomy_abundance(
+/// Write species-level taxonomy abundance table to TSV file
+pub fn write_species_abundance(
     classifications: &[AsvClassification],
     output_path: &Path,
 ) -> std::io::Result<()> {
@@ -327,7 +346,7 @@ pub fn write_taxonomy_abundance(
 
     for classification in classifications {
         if let Some(ref taxonomy) = classification.taxonomy {
-            // Create a unique key for this taxonomic assignment
+            // Create a unique key for this taxonomic assignment (species-level)
             let key = format!(
                 "{}|{}|{}|{}|{}|{}|{}|{}|{}",
                 taxonomy.species,
@@ -373,6 +392,124 @@ pub fn write_taxonomy_abundance(
     Ok(())
 }
 
+/// Write genus-level taxonomy abundance table to TSV file
+pub fn write_genus_abundance(
+    classifications: &[AsvClassification],
+    output_path: &Path,
+) -> std::io::Result<()> {
+    let mut file = File::create(output_path)?;
+
+    // Write header
+    writeln!(
+        file,
+        "abundance\tgenus\tfamily\torder\tclass\tphylum\tclade\tsuperkingdom"
+    )?;
+
+    // Aggregate abundances by genus
+    let mut genus_abundances: HashMap<String, (String, String, String, String, String, String, String, f64)> = HashMap::new();
+
+    for classification in classifications {
+        if let Some(ref taxonomy) = classification.taxonomy {
+            // Create a unique key for genus-level (genus + higher levels)
+            let key = format!(
+                "{}|{}|{}|{}|{}|{}|{}",
+                taxonomy.genus,
+                taxonomy.family,
+                taxonomy.order,
+                taxonomy.class,
+                taxonomy.phylum,
+                taxonomy.clade,
+                taxonomy.superkingdom
+            );
+
+            genus_abundances
+                .entry(key)
+                .and_modify(|(_, _, _, _, _, _, _, abundance)| *abundance += classification.abundance)
+                .or_insert((
+                    taxonomy.genus.clone(),
+                    taxonomy.family.clone(),
+                    taxonomy.order.clone(),
+                    taxonomy.class.clone(),
+                    taxonomy.phylum.clone(),
+                    taxonomy.clade.clone(),
+                    taxonomy.superkingdom.clone(),
+                    classification.abundance
+                ));
+        }
+    }
+
+    // Sort by abundance (descending)
+    let mut sorted_genera: Vec<_> = genus_abundances.into_iter().collect();
+    sorted_genera.sort_by(|a, b| b.1 .7.partial_cmp(&a.1 .7).unwrap());
+
+    // Write sorted genus entries
+    for (_, (genus, family, order, class, phylum, clade, superkingdom, abundance)) in sorted_genera {
+        writeln!(
+            file,
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            abundance,
+            genus,
+            family,
+            order,
+            class,
+            phylum,
+            clade,
+            superkingdom,
+        )?;
+    }
+
+    Ok(())
+}
+
+/// Write ASV mapping details to TSV file
+pub fn write_asv_mappings(
+    classifications: &[AsvClassification],
+    output_path: &Path,
+) -> std::io::Result<()> {
+    let mut file = File::create(output_path)?;
+
+    // Write header
+    writeln!(
+        file,
+        "asv_header\tdepth\tmapping_length\talignment_identity\tnumber_mismatches\ttax_id\tspecies\tgenus\treference"
+    )?;
+
+    for classification in classifications {
+        // Extract depth from header (format: final_consensus_0_depth_42)
+        let depth_str = extract_depth_string(&classification.asv_header);
+
+        if let Some(ref taxonomy) = classification.taxonomy {
+            if let Some(identity) = classification.identity {
+                // Calculate approximate values
+                // We don't have the exact mapping length and NM stored, so we'll need to add them
+                // For now, write what we have
+                writeln!(
+                    file,
+                    "{}\t{}\t{:.2}\t{}\t{}\t{}\t{}\t{}",
+                    classification.asv_header,
+                    depth_str,
+                    identity,
+                    classification.nm.unwrap_or(0),
+                    classification.best_hit_tax_id.as_ref().unwrap_or(&String::from("NA")),
+                    taxonomy.species,
+                    taxonomy.genus,
+                    classification.hit_reference_id,
+                )?;
+            }
+        } else {
+            // Unclassified ASV
+            writeln!(
+                file,
+                "{}\t{}\tNA\tNA\tNA\tNA\tUNCLASSIFIED\tUNCLASSIFIED",
+                classification.asv_header,
+                depth_str,
+            )?;
+        }
+    }
+
+    Ok(())
+}
+
 
 /// Load FASTA sequences using needletail
 pub fn load_fasta_with_needletail(path: &Path) -> std::io::Result<Vec<(String, Vec<u8>)>> {
@@ -395,9 +532,19 @@ pub fn load_fasta_with_needletail(path: &Path) -> std::io::Result<Vec<(String, V
 pub fn extract_depths_from_headers(sequences: &[(String, Vec<u8>)]) -> Vec<usize> {
     sequences.iter().map(|(header, _)| {
         // Parse depth from header like ">final_consensus_0_depth_42"
-        header.split('_')
+        let first_non_whitespace = header.split_whitespace().next().unwrap_or(header);
+        first_non_whitespace.split('_')
             .last()
             .and_then(|s| s.parse::<usize>().ok())
             .unwrap_or(1)
     }).collect()
+}
+
+pub fn extract_depth_string(sequence: &str) -> String {
+    // Parse depth from header like ">final_consensus_0_depth_42"
+    let first_non_whitespace = sequence.split_whitespace().next().unwrap_or(sequence);
+    first_non_whitespace.split('_')
+        .last()
+        .unwrap_or("1")
+        .to_string()
 }

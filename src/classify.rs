@@ -11,6 +11,7 @@ use std::collections::HashMap;
 struct AsvMapping {
     asv_idx: usize,
     tax_idx: String,  // Index into the unique tax_id list
+    hit_reference_id: String,
     index: usize, 
     identity: f64,
     nm: u32,
@@ -120,7 +121,7 @@ fn collect_best_mappings(
     asv_depths: &[usize],
     db: &taxonomy::Database,
     args: &cli::ClassifyArgs,
-) -> Vec<(usize, String, f64, u32, usize, String)> {
+) -> Vec<(usize, String, f64, u32, usize, String, String)> {
 
     let aligner = minimap2::Aligner::builder()
         .map_ont()
@@ -163,7 +164,8 @@ fn collect_best_mappings(
 
                                     if let Some(key) = db_key {
                                         if db.taxonomy.contains_key(&key) {
-                                            let mapping_record = (asv_idx, key, identity, alignment.nm as u32, asv_depths[asv_idx], asv_header.clone());
+                                            let mapping_record = (asv_idx, key, identity, alignment.nm as u32, asv_depths[asv_idx], 
+                                                asv_header.clone(), (*(*mapping.target_name.as_ref().unwrap())).clone());
                                             all_mappings.lock().unwrap().push(mapping_record);
                                         }
                                     }
@@ -205,7 +207,7 @@ pub fn classify(args: &cli::ClassifyArgs, db: &taxonomy::Database) {
     let mut tax_id_to_idx: HashMap<String, usize> = HashMap::new();
     let mut idx_to_tax_id: Vec<String> = Vec::new();
 
-    for (_, tax_id, _, _, _, _) in &all_mappings {
+    for (_, tax_id, _, _, _, _, _) in &all_mappings {
         if !tax_id_to_idx.contains_key(tax_id) {
             let idx = idx_to_tax_id.len();
             tax_id_to_idx.insert(tax_id.clone(), idx);
@@ -217,10 +219,11 @@ pub fn classify(args: &cli::ClassifyArgs, db: &taxonomy::Database) {
 
     // Convert mappings to indexed format
     let mappings: Vec<AsvMapping> = all_mappings.iter()
-        .map(|(asv_idx, tax_id, identity, nm, depth, _)| AsvMapping {
+        .map(|(asv_idx, tax_id, identity, nm, depth, _, hit_reference_id)| AsvMapping {
             asv_idx: *asv_idx,
             tax_idx: tax_id.clone(),
             index: *tax_id_to_idx.get(tax_id).unwrap(),
+            hit_reference_id: hit_reference_id.clone(),
             identity: *identity,
             nm: *nm,
             depth: *depth,
@@ -239,7 +242,7 @@ pub fn classify(args: &cli::ClassifyArgs, db: &taxonomy::Database) {
     for asv_idx in 0..consensus_sequences.len() {
         let (header, _) = &consensus_sequences[asv_idx];
         let asv_id = format!("ASV_{}", asv_idx);
-        let asv_header = header.trim_start_matches('>').to_string();
+        let asv_header = header.trim_start_matches('>').split_whitespace().next().unwrap_or("").to_string();
 
         // Find all mappings for this ASV
         let asv_mappings: Vec<&AsvMapping> = mappings.iter()
@@ -281,6 +284,8 @@ pub fn classify(args: &cli::ClassifyArgs, db: &taxonomy::Database) {
                 best_hit_tax_id: Some(tax_id.clone()),
                 identity: Some(best_mapping.identity),
                 taxonomy: Some(taxonomy_assignment),
+                nm: Some(best_mapping.nm as usize),
+                hit_reference_id: best_mapping.hit_reference_id.clone(),
             });
         } else {
             // No alignment found
@@ -288,6 +293,8 @@ pub fn classify(args: &cli::ClassifyArgs, db: &taxonomy::Database) {
                 asv_id,
                 asv_header,
                 abundance: asv_depths[asv_idx] as f64 / total_reads as f64,
+                hit_reference_id: String::new(),
+                nm: None,
                 best_hit_tax_id: None,
                 identity: None,
                 taxonomy: None,
@@ -297,13 +304,29 @@ pub fn classify(args: &cli::ClassifyArgs, db: &taxonomy::Database) {
 
     classifications.sort_by(|a, b| b.abundance.partial_cmp(&a.abundance).unwrap());
 
-    // Step 7: Write output
-    let output_dir_path = Path::new(&args.output_dir);
-    let output_file = output_dir_path.join("taxonomy_abundance.tsv");
-    taxonomy::write_taxonomy_abundance(&classifications, &output_file)
-        .expect("Failed to write taxonomy abundance file");
+    // Step 7: Write output files
+    //let output_dir_path = Path::new(args.output_dir.as_ref().unwrap_or(args.input_dir.clone()));
+    let output_dir_path = if let Some(ref out_dir) = args.output_dir {
+        Path::new(out_dir)
+    } else {
+        Path::new(&args.input_dir)
+    };
 
-    log::info!("Wrote taxonomy abundance table to {}", output_file.display());
+    let species_file = output_dir_path.join("species_abundance.tsv");
+    taxonomy::write_species_abundance(&classifications, &species_file)
+        .expect("Failed to write species abundance file");
+    log::info!("Wrote species abundance table to {}", species_file.display());
+
+    let genus_file = output_dir_path.join("genus_abundance.tsv");
+    taxonomy::write_genus_abundance(&classifications, &genus_file)
+        .expect("Failed to write genus abundance file");
+    log::info!("Wrote genus abundance table to {}", genus_file.display());
+
+    let mappings_file = output_dir_path.join("asv_mappings.tsv");
+    taxonomy::write_asv_mappings(&classifications, &mappings_file)
+        .expect("Failed to write ASV mappings file");
+    log::info!("Wrote ASV mappings table to {}", mappings_file.display());
+
     log::info!("Classification complete! Classified {}/{} ASVs",
         classifications.iter().filter(|c| c.taxonomy.is_some()).count(),
         classifications.len());

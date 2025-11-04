@@ -4,7 +4,7 @@ use crate::constants::CLI_HEADINGS;
 #[derive(Parser, Debug)]
 #[command(
     name = "savont",
-    about = "savont - high-resolution 16S rRNA clustering and denoising for long-read metagenomic data",
+    about = "savont - high-resolution ASV (Amplicon Sequence Variant) generation and taxonomic profiling for ONT R10.4/HiFI long-read amplicon sequencing",
     version,
     author,
     disable_help_subcommand = true,
@@ -21,13 +21,17 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug)]
 pub enum Commands {
-    /// Cluster reads into ASVs (Amplicon Sequence Variants)
+    /// Cluster long reads of >~ 98% accuracy into ASVs (Amplicon Sequence Variants)
     #[command(name = "asv")]
     Cluster(ClusterArgs),
 
-    /// Classify ASVs against a reference database and generate taxonomy abundance table
+    /// Classify ASVs against a reference database and generate taxonomy abundance table at species/genus level
     #[command(name = "classify")]
     Classify(ClassifyArgs),
+
+    /// Download reference databases for savont (EMU or SILVA)
+    #[command(name = "download")]
+    Download(DownloadArgs),
 }
 
 #[derive(Parser, Debug, Clone)]
@@ -103,9 +107,9 @@ pub struct ClassifyArgs {
     #[arg(short, long, required = true)]
     pub input_dir: String,
 
-    /// Output directory for classification results
-    #[arg(short, long, default_value = "savont-classify-out")]
-    pub output_dir: String,
+    /// Output directory for classification results. Default: same as the input directory
+    #[arg(short, long)]
+    pub output_dir: Option<String>,
 
     #[command(flatten)]
     pub db_type: DatabaseType,
@@ -133,6 +137,28 @@ pub struct DatabaseType {
     /// SILVA database path
     #[arg(long, help_heading = "Database")]
     pub silva_db: Option<String>,
+}
+
+#[derive(Parser, Debug, Clone)]
+pub struct DownloadArgs {
+    /// Download location directory
+    #[arg(short, long, required = true)]
+    pub location: String,
+
+    #[command(flatten)]
+    pub db_type: DownloadDatabaseType,
+}
+
+#[derive(Args, Debug, Clone)]
+#[group(required = true, multiple = true)]
+pub struct DownloadDatabaseType {
+    /// Download EMU database
+    #[arg(long)]
+    pub emu_db: bool,
+
+    /// Download SILVA database
+    #[arg(long)]
+    pub silva_db: bool,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, ValueEnum)]

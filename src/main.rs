@@ -13,6 +13,7 @@ use savont::alignment;
 use savont::utils::*;
 use savont::chimera;
 use savont::taxonomy;
+use savont::download;
 use std::fs::File;
 use std::io::BufReader;
 use std::path::Path;
@@ -29,30 +30,37 @@ fn main() {
         cli::Commands::Classify(classify_args) => {
             run_classify(classify_args, &args);
         }
+        cli::Commands::Download(download_args) => {
+            run_download(download_args, &args);
+        }
     }
 }
 
 fn run_cluster(args: &cli::ClusterArgs, cli_args: &cli::Cli) {
     let output_dir = initialize_setup_cluster(args, cli_args);
 
+    // Create temp directory for intermediate files
+    let temp_dir = output_dir.join("temp");
+    std::fs::create_dir_all(&temp_dir).expect("Failed to create temp directory");
+    log::info!("Created temp directory for intermediate files: {}", temp_dir.display());
+
     log::info!("Starting clustering...");
 
     // Step 1: Process k-mers, count k-mers, and get SNPmers
-    let mut kmer_info = get_kmers_and_snpmers(&args, &output_dir);
+    let mut kmer_info = get_kmers_and_snpmers(&args, &temp_dir);
     log_memory_usage(true, "STAGE 1: Obtained SNPmers");
 
     // Step 1.5: Get twin reads from SNPmers
     let twin_reads = get_twin_reads_from_kmer_info(
         &mut kmer_info,
         &args,
-        &output_dir,
-        &output_dir.join("binary_temp"),
+        &temp_dir,
+        &temp_dir.join("binary_temp"),
     );
-    log_memory_usage(true, "STAGE 1.5: Obtained twin reads from SNPmers");
 
-    let clusters = asv_cluster::cluster_reads_by_kmers(&twin_reads, &args, &output_dir);
-    let clusters = asv_cluster::cluster_reads_by_snpmers(&twin_reads, &clusters, &args, &output_dir);
-    let mut consensuses = alignment::align_and_consensus(&twin_reads, clusters, &args, &output_dir);
+    let clusters = asv_cluster::cluster_reads_by_kmers(&twin_reads, &args, &temp_dir);
+    let clusters = asv_cluster::cluster_reads_by_snpmers(&twin_reads, &clusters, &args, &temp_dir);
+    let mut consensuses = alignment::align_and_consensus(&twin_reads, clusters, &args, &temp_dir);
 
     // Generate pileups for quality estimation
     let mut pileups = alignment::generate_consensus_pileups(&twin_reads, &consensuses, &args);
@@ -69,8 +77,8 @@ fn run_cluster(args: &cli::ClusterArgs, cli_args: &cli::Cli) {
     let quality_error_map = alignment::estimate_quality_error_rates(&pileups, &consensuses, 0.1);
 
     // Polish consensus sequences using Bayesian inference
-    let mut low_qual_consensus = alignment::polish_consensuses(&mut pileups, &mut consensuses, &quality_error_map, &twin_reads, &args);
-    log_memory_usage(true, "STAGE 1.9: Polished consensus sequences");
+    let mut low_qual_consensus = alignment::polish_consensuses(&mut pileups, &mut consensuses, &quality_error_map, &twin_reads, &args, &temp_dir);
+    log_memory_usage(true, "STAGE 2: Polished consensus sequences");
 
     // Decompress HPC sequences before merging and chimera detection
     log::info!("Decompressing {} HPC consensus sequences for merging and chimera detection", consensuses.len());
@@ -84,23 +92,22 @@ fn run_cluster(args: &cli::ClusterArgs, cli_args: &cli::Cli) {
         consensus.decompress();
     }
 
-    alignment::write_consensus_fasta(&low_qual_consensus, &output_dir.join("low_quality_consensus_sequences.fasta"), "lowqual")
+    alignment::write_consensus_fasta(&low_qual_consensus, &temp_dir.join("low_quality_consensus_sequences.fasta"), "lowqual")
         .expect("Failed to write low_quality_consensus_sequences.fasta");
 
     // Merge similar consensus sequences based on alignment and depth (using decompressed sequences)
     // This also merges low quality consensuses into high quality ones
-    let consensuses = alignment::merge_similar_consensuses(&twin_reads, consensuses, low_qual_consensus, &args);
-    log_memory_usage(true, "STAGE 2: Merged similar consensus sequences");
+    let consensuses = alignment::merge_similar_consensuses(&twin_reads, consensuses, low_qual_consensus, &args, &temp_dir);
+    log_memory_usage(true, "STAGE 3: Merged similar consensus sequences");
 
     // Detect and filter chimeric consensus sequences
     if args.skip_chimera_detection {
         log::info!("Skipping chimera detection as per user request.");
-        log_memory_usage(true, "STAGE 2.5: Skipped chimera detection");
         return;
     }
     let chimeras = chimera::detect_chimeras(&consensuses, &args);
     let consensuses = chimera::filter_chimeras(consensuses, &chimeras);
-    log_memory_usage(true, "STAGE 2.5: Filtered chimeric consensus sequences");
+    log_memory_usage(true, "STAGE 4: Filtered chimeric consensus sequences");
 
     log::info!("Final consensus count after all filtering: {}", consensuses.len());
 
@@ -144,8 +151,29 @@ fn run_classify(args: &cli::ClassifyArgs, cli_args: &cli::Cli) {
 
 }
 
+fn run_download(args: &cli::DownloadArgs, cli_args: &cli::Cli) {
+    // Initialize simple console logger for download command
+    let log_spec = format!("{}", cli_args.log_level_filter().to_string());
+    let _logger_handle = flexi_logger::Logger::try_with_str(log_spec)
+        .expect("Something went wrong with logging")
+        .duplicate_to_stderr(flexi_logger::Duplicate::All)
+        .format(my_own_format_colored)
+        .start()
+        .expect("Something went wrong with creating logger");
+
+    log::info!("Starting database download...");
+
+    download::download(&args);
+
+    log::info!("Download complete!");
+}
+
 fn initialize_setup_classify(args: &cli::ClassifyArgs, cli_args: &cli::Cli) -> PathBuf {
-    let output_dir = Path::new(&args.output_dir);
+    let output_dir = if let Some(dir) = args.output_dir.as_ref() {
+        Path::new(dir)
+    } else {
+        Path::new(&args.input_dir)
+    };
 
     if !output_dir.exists() {
         std::fs::create_dir_all(output_dir).expect("Could not create output directory. Exiting.");
@@ -339,7 +367,7 @@ fn get_twin_reads_from_kmer_info(
     _output_dir: &PathBuf,
     _cleaning_temp_dir: &PathBuf,
 ) -> Vec<types::TwinRead>{
-    log::info!("Getting twin reads from snpmers...");
+    log::info!("Getting reads...");
     let mut twin_reads_raw = kmer_comp::twin_reads_from_snpmers(kmer_info, &args);
     twin_reads_raw.sort_by(|a,b| b.est_id.unwrap_or(100.0).partial_cmp(&a.est_id.unwrap_or(100.0)).unwrap());
     return twin_reads_raw;

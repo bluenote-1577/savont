@@ -37,8 +37,6 @@ pub fn homopolymer_compression(seq: Vec<u8>) -> Vec<u8> {
 
 pub fn twin_reads_from_snpmers(kmer_info: &mut KmerGlobalInfo, args: &Cli) -> Vec<TwinRead>{
 
-    let start = std::time::Instant::now();
-
     let fastq_files = &kmer_info.read_files;
     let mut snpmer_set = HashSet::default();
     for snpmer_i in kmer_info.snpmer_info.iter(){
@@ -186,14 +184,15 @@ pub fn twin_reads_from_snpmers(kmer_info: &mut KmerGlobalInfo, args: &Cli) -> Ve
         }
     }
 
-    log::debug!("Number of reads filtered due to repetitiveness: {}", num_reads_removed_repetitive.lock().unwrap());
     let number_reads_below_threshold = twin_reads.iter().filter(|x| x.est_id.is_some() && x.est_id.unwrap() < args.quality_value_cutoff).count();
-    log::info!("Number of valid reads with >= 1kb - {}. Number of reads below quality threshold - {}.", twin_reads.len(), number_reads_below_threshold);
+    log::info!("Number of valid reads  - {}. Number of reads below quality threshold - {}.", twin_reads.len(), number_reads_below_threshold);
+    if number_reads_below_threshold as f64 / twin_reads.len() as f64 > 0.5{
+        log::warn!("More than 50% of reads are below the quality threshold of {}%. This may imply that these reads are not high enough quality for ASV reconstruction. Proceed with caution!", args.quality_value_cutoff);
+    }
     twin_reads.retain(|x| x.est_id.is_none() || x.est_id.unwrap() >= args.quality_value_cutoff);
     let snpmer_densities = twin_reads.iter().map(|x| x.snpmer_positions.len() as f64 / x.base_length as f64).collect::<Vec<_>>();
     let mean_snpmer_density = snpmer_densities.iter().sum::<f64>() / snpmer_densities.len() as f64;
     log::info!("Mean SNPmer density: {:.2}%", mean_snpmer_density * 100.);
-    log::info!("Time elapsed for obtaining twin reads is: {:?}", start.elapsed());
 
     return twin_reads;
 }
