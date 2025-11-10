@@ -9,7 +9,6 @@ Unlike mapping-based approaches (e.g. Emu or ONT's epi2me workflow), savont foll
 Savont is designed for high-accuracy long-read amplicon sequencing (>98% accuracy). It can:
 
 * Generate high-resolution ASVs from ONT R10.4 or PacBio HiFi 16S amplicon reads
-* Detect and remove chimeric sequences
 * Classify ASVs against EMU or SILVA reference databases
 * Output species-level and genus-level taxonomic abundance tables
 * Provide detailed ASV mapping information for quality control
@@ -170,16 +169,11 @@ From [Emu](https://github.com/treangenlab/emu) by Curry et al. (2022, Nature Met
 
 1. Check `asv_mappings.tsv` for ASV depth distribution
 2. Low-depth ASVs (<20 reads) may be artifacts or rare taxa
-3. High percent_accuracy (>97%) indicates confident mappings
-4. Examine unmapped ASVs in `asvs.fasta` vs. `asv_mappings.tsv`
+3. Examine unmapped ASVs in `asv_mappings.tsv` or the log.
 
 ## Citation
 
 FORTHCOMING. 
-
-## Contributing
-
-Issues and pull requests are welcome at [https://github.com/YOUR_USERNAME/savont/issues](https://github.com/YOUR_USERNAME/savont/issues)
 
 ## License
 
