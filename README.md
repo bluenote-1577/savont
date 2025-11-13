@@ -21,13 +21,9 @@ Savont is designed for high-accuracy long-read amplicon sequencing (>98% accurac
 #### Option 1: Build from source
 
 Requirements:
-1. [rust](https://www.rust-lang.org/tools/install) (version > 1.70) programming language and associated tools such as cargo
-2. A C/C++ compiler (e.g. GCC)
+1. [rust](https://www.rust-lang.org/tools/install) (tested for > v1.88) programming language
+2. Standard linux toolchain (tar, gzip, wget, C++, gcc)
 3. cmake
-4. wget (for database download)
-5. tar and gzip (for extracting databases)
-
-Building takes a few minutes (depending on # of cores).
 
 ```sh
 git clone https://github.com/bluenote-1577/savont
@@ -37,8 +33,6 @@ cd savont
 cargo install --path .
 savont --help
 ```
-
-#### Option 2: Pre-built executable (coming soon)
 
 ## Quick start
 
@@ -125,14 +119,13 @@ abundance       genus   family  order   class   phylum  clade   superkingdom
 Individual ASV mapping details:
 
 ```
-asv_header      depth   mapping_length  alignment_identity      number_mismatches       tax_id  species genus   reference
+asv_header      depth     alignment_identity      number_mismatches       tax_id  species genus   reference
 final_consensus_0_depth_5936    5936    99.67   5       29466   Veillonella parvula     Veillonella     29466:emu_db:36875
 final_consensus_1_depth_3081    3081    99.27   11      29466   Veillonella parvula     Veillonella     29466:emu_db:36873
+final_consensus_2_depth_2927    2927    99.40   9       29466   Veillonella parvula     Veillonella     29466:emu_db:36869
 ```
 
-- One row per ASV with mapping statistics
-- `depth` - Number of reads in the ASV cluster
-- `percent_accuracy` - Alignment identity to reference
+One row per ASV with mapping statistics. The best mapping reference and its corresponding species/genus is denoted. 
 
 ## Algorithm Overview
 
