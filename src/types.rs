@@ -516,6 +516,13 @@ impl TwinRead{
         //our representation is CA = 0100.
         // Internally, we want CA = 8 HEX = 0100. So 
         let kmer = match k{
+
+            13 => {
+                reverse_bit_pairs(Kmer::<Dna, 13, u64>::unsafe_from_seqslice(&self.dna_seq[pos..pos + k]).bs, k)
+            }
+            15 => {
+                reverse_bit_pairs(Kmer::<Dna, 15, u64>::unsafe_from_seqslice(&self.dna_seq[pos..pos + k]).bs, k)
+            }
             17 => {
                 reverse_bit_pairs(Kmer::<Dna, 17, u64>::unsafe_from_seqslice(&self.dna_seq[pos..pos + k]).bs, k)
             }

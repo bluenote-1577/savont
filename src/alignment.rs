@@ -1,5 +1,6 @@
 use crate::{types::*, utils};
 use crate::constants::*;
+use triple_accel::*;
 use std::io::Write;
 use std::sync::Mutex;
 use crate::cli::ClusterArgs as Cli;
@@ -1024,9 +1025,9 @@ pub fn polish_consensuses(
         .expect("Failed to write clusters_before_quality_filter.tsv");
     log::info!("Wrote cluster information before filtering to clusters_before_quality_filter.tsv");
 
-    let low_quality_consensuses = consensuses.iter().filter(|c| lq_criteria(c)).map(|c| c.clone()).collect::<Vec<_>>();
+    let low_quality_consensuses = consensuses.iter().filter(|c| lq_criteria(c, args)).map(|c| c.clone()).collect::<Vec<_>>();
     log::info!("Low quality consensus sequences: {:?}", &low_quality_consensuses.iter().map(|c| c.id).collect::<Vec<_>>());
-    consensuses.retain(|c| !lq_criteria(c));
+    consensuses.retain(|c| !lq_criteria(c, args));
 
     log::info!("Polishing complete");
 
@@ -1037,9 +1038,9 @@ pub fn polish_consensuses(
     return low_quality_consensuses;
 }
 
-fn lq_criteria(consensus: &ConsensusSequence) -> bool {
+fn lq_criteria(consensus: &ConsensusSequence, args: &Cli) -> bool {
     (consensus.low_quality_positions.len() > 0) && 
-    (consensus.depth / ((consensus.low_quality_positions.len() * consensus.low_quality_positions.len())) < 250)
+    (consensus.depth / ((consensus.low_quality_positions.len() * consensus.low_quality_positions.len())) < args.n_depth_cutoff)
 }
 
 /// Merge similar consensus sequences based on alignment and depth criteria
@@ -1291,4 +1292,773 @@ pub fn merge_similar_consensuses(
     log::info!("Wrote {} merged consensus sequences to merged_consensus_sequences.fasta", new_consensuses.len());
 
     new_consensuses
+}
+
+/// Equivalence class: a set of ASVs that a group of reads maps to with equal quality
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct EquivalenceClass {
+    asv_indices: Vec<usize>,
+}
+
+/// Refine ASV depths using EM algorithm on read-level mappings
+/// Maps all reads back to final ASVs and redistributes abundances
+pub fn refine_asv_depths_with_em(
+    twin_reads: &[TwinRead],
+    consensuses: &mut Vec<ConsensusSequence>,
+    args: &Cli,
+    temp_dir: &PathBuf,
+) {
+    if consensuses.is_empty() {
+        log::warn!("No consensuses to refine");
+        return;
+    }
+
+    log::info!("Refining ASV depths using EM algorithm on read-level mappings");
+
+    // Step 1: Write final ASVs to temporary FASTA for indexing
+    let asv_fasta_path = temp_dir.join("final_asvs_for_em.fasta");
+    write_consensus_fasta(&consensuses, &asv_fasta_path, "em_refinement")
+        .expect("Failed to write ASVs for EM refinement");
+
+    // Step 2: Build aligner with LrHQ preset
+    let aligner = Aligner::builder()
+        .preset(minimap2::Preset::LrHq)
+        .with_index_threads(args.threads)
+        .with_cigar()
+        .with_index(asv_fasta_path.to_str().unwrap(), None)
+        .expect("Failed to create aligner for EM refinement");
+
+    log::info!("Mapping {} reads to {} ASVs for EM refinement", twin_reads.len(), consensuses.len());
+
+    // Step 3: Map all reads to ASVs and collect equivalence classes
+    let eq_classes = Mutex::new(HashMap::new());
+    let filtered_reads_count = Mutex::new(0usize);
+    let total_assigned_reads = Mutex::new(0usize);
+
+    twin_reads.par_iter().enumerate().for_each(|(_read_idx, twin_read)| {
+        let read_seq: Vec<u8> = twin_read.dna_seq.iter()
+            .map(|x| x.to_char().to_ascii_uppercase() as u8)
+            .collect();
+
+        // Align read to all ASVs
+        let alignment_result = aligner.map(&read_seq, true, false, None, None, None);
+
+        if let Ok(alignments) = alignment_result {
+            if alignments.is_empty() {
+                return;
+            }
+
+            // Find minimum NM (best alignment quality)
+            let min_nm = alignments.first().and_then(|m| m.alignment.as_ref().map(|a| a.nm));
+
+            if let Some(min_nm) = min_nm {
+                // Collect all alignments with the minimum NM
+                let mut best_asv_indices = Vec::new();
+                let mut _best_identity = 0.0;
+
+                for mapping in &alignments {
+                    if let Some(alignment) = &mapping.alignment {
+                        if alignment.nm == min_nm {
+                            let query_len = mapping.query_len.unwrap().get() as f64;
+                            let identity = 100.0 * (1.0 - alignment.nm as f64 / query_len);
+
+                            // Filter out poor mappings (<98% identity)
+                            if identity >= 98.0 {
+                                best_asv_indices.push(mapping.target_id as usize);
+                                _best_identity = identity;
+                            }
+                            else{
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                // Only keep reads that have at least one good mapping
+                if !best_asv_indices.is_empty() {
+                    // Sort to ensure consistent equivalence class keys
+                    best_asv_indices.sort_unstable();
+
+                    let eq_class = EquivalenceClass {
+                        asv_indices: best_asv_indices,
+                    };
+
+                    // Add to equivalence class with count
+                    let mut eq_map = eq_classes.lock().unwrap();
+                    *eq_map.entry(eq_class).or_insert(0) += 1;
+                    *total_assigned_reads.lock().unwrap() += 1;
+                } else {
+                    *filtered_reads_count.lock().unwrap() += 1;
+                }
+            }
+        }
+    });
+
+    let eq_classes = eq_classes.into_inner().unwrap();
+    let filtered_reads = filtered_reads_count.into_inner().unwrap();
+    let total_assigned = total_assigned_reads.into_inner().unwrap();
+
+    log::info!("Filtered {} reads with <98% identity", filtered_reads);
+    log::info!("Total assigned reads: {}", total_assigned);
+    log::info!("Number of unique equivalence classes: {}", eq_classes.len());
+
+    //debug equiv classes
+
+    for (eq_class, count) in &eq_classes {
+        log::debug!("Equivalence class: ASVs {:?}, Count {}", eq_class.asv_indices, count);
+    }
+
+    if eq_classes.is_empty() {
+        log::warn!("No reads mapped well to ASVs. Keeping original depths.");
+        return;
+    }
+
+    // Step 4: Run EM algorithm on equivalence classes
+    let num_asvs = consensuses.len();
+    let mut asv_abundances = vec![1.0 / num_asvs as f64; num_asvs];
+    let convergence_threshold = 0.01 / total_assigned as f64;
+
+    log::info!("Running EM algorithm with convergence threshold: {:.6e}", convergence_threshold);
+
+    let mut iteration = 0;
+    const MAX_ITERATIONS: usize = 1000;
+
+    loop {
+        iteration += 1;
+        let mut new_asv_abundances = vec![0.0; num_asvs];
+
+        // E-step + M-step: distribute reads proportionally based on current abundances
+        for (eq_class, count) in &eq_classes {
+            let denominator: f64 = eq_class.asv_indices.iter()
+                .map(|&asv_idx| asv_abundances[asv_idx])
+                .sum();
+
+            if denominator > 0.0 {
+                for &asv_idx in &eq_class.asv_indices {
+                    let contribution = (*count as f64) * asv_abundances[asv_idx] / denominator;
+                    new_asv_abundances[asv_idx] += contribution;
+                }
+            }
+        }
+
+        // Normalize by total assigned reads
+        let total_counts: f64 = new_asv_abundances.iter().sum();
+        if total_counts > 0.0 {
+            for abundance in new_asv_abundances.iter_mut() {
+                *abundance /= total_assigned as f64;
+            }
+        }
+
+        // Check convergence
+        let max_change = asv_abundances.iter()
+            .zip(new_asv_abundances.iter())
+            .map(|(old, new)| (old - new).abs())
+            .fold(0.0, f64::max);
+
+        asv_abundances = new_asv_abundances;
+
+        if max_change < convergence_threshold || iteration >= MAX_ITERATIONS {
+            log::info!("EM converged after {} iterations (max change: {:.6e})", iteration, max_change);
+            break;
+        }
+
+        if iteration % 10 == 0 {
+            log::debug!("EM iteration {}: max change {:.6e}", iteration, max_change);
+        }
+    }
+
+    // Step 5: Update consensus depths based on EM abundances
+    log::info!("Updating ASV depths based on EM abundances");
+    for (asv_idx, consensus) in consensuses.iter_mut().enumerate() {
+        let em_abundance = asv_abundances[asv_idx];
+        let new_depth = (em_abundance * total_assigned as f64).round() as usize;
+
+        log::debug!("ASV {}: Original depth = {}, EM abundance = {:.6}, New depth = {}",
+            asv_idx, consensus.depth, em_abundance, new_depth);
+
+        consensus.depth = new_depth;
+    }
+
+    // Filter out ASVs with zero depth after EM
+    let original_count = consensuses.len();
+    consensuses.retain(|c| c.depth > 0);
+    let filtered_count = original_count - consensuses.len();
+
+    if filtered_count > 0 {
+        log::info!("Filtered {} ASVs with zero depth after EM refinement", filtered_count);
+    }
+
+    log::info!("EM refinement complete: {} ASVs remaining", consensuses.len());
+}
+
+/// Structure to store heterogeneous block information
+#[derive(Debug, Clone)]
+struct HeterogeneousBlock {
+    block_idx: usize,
+    variants: Vec<VariantInfo>, // Variants sorted by count descending
+}
+
+/// Information about a single variant including HP lengths
+#[derive(Debug, Clone)]
+struct VariantInfo {
+    sequence: Vec<u8>,
+    count: usize,
+    modal_hp_lengths: Vec<u8>, // Modal HP length for each base position
+}
+
+/// Structure to store read alignment data for a single read
+#[derive(Debug, Clone)]
+struct ReadAlignment {
+    aligned_blocks: Vec<Vec<u8>>, // One Vec<u8> per block (stores actual bases)
+    aligned_hp_lengths: Vec<Vec<u8>>, // HP lengths for each base in each block
+}
+
+/// Haplotype signature: which variant a read has at each heterogeneous block
+type HaplotypeSignature = Vec<(usize, usize)>; // (block_idx, variant_idx)
+
+/// Check heterogeneity for a single ASV and perform phasing analysis
+/// Returns new consensus sequences generated from heterogeneous haplotypes
+fn check_single_asv_heterogeneity(
+    asv_idx: usize,
+    consensus: &ConsensusSequence,
+    twin_reads: &[TwinRead],
+    max_reads_per_asv: usize,
+    block_size: usize,
+    min_count_fraction: f64,
+    min_edit_distance: usize,
+    edge_buffer: usize,
+    min_haplotype_fraction: f64,
+) -> Vec<ConsensusSequence> {
+    let cluster = &consensus.cluster;
+    let consensus_seq = &consensus.sequence;
+
+    if cluster.len() < 100 {
+        return Vec::new();
+    }
+
+    // Determine number of blocks
+    let num_blocks = (consensus_seq.len() + block_size - 1) / block_size;
+
+    // Storage for aligned sequences in each block: block_idx -> (sequence, count)
+    let mut block_sequences: Vec<HashMap<Vec<u8>, usize>> = vec![HashMap::new(); num_blocks];
+
+    // Storage for HP lengths in each block: block_idx -> sequence -> list of HP length vectors
+    let mut block_hp_lengths: Vec<HashMap<Vec<u8>, Vec<Vec<u8>>>> = vec![HashMap::new(); num_blocks];
+
+    // Storage for read alignments (for phasing analysis later)
+    let mut read_alignments: Vec<ReadAlignment> = Vec::new();
+
+    // Create aligner with this consensus as reference
+    let aligner = Aligner::builder()
+        .preset(minimap2::Preset::LrHq)
+        .with_index_threads(1)
+        .with_cigar()
+        .with_seq(consensus_seq)
+            .expect("Failed to create aligner");
+
+        // Align up to max_reads_per_asv reads
+        let reads_to_align = cluster.len().min(max_reads_per_asv);
+
+        for i in 0..reads_to_align {
+            let read_idx = cluster[i];
+            let twin_read = &twin_reads[read_idx];
+
+            // Get sequence
+            let seq_u8: Vec<u8> = twin_read.dna_seq.iter()
+                .map(|x| x.to_char().to_ascii_uppercase() as u8)
+                .collect();
+
+            // Get and expand qualities
+            let query_quals_u8 = if let Some(qual_seq) = &twin_read.qual_seq {
+                utils::expand_binned_qualities_from_iter(qual_seq.iter().map(|x| x as u8), seq_u8.len(), QUALITY_SEQ_BIN)
+            } else {
+                vec![33; seq_u8.len()]
+            };
+
+            // HPC compress
+            let (hpc_seq, _hpc_qual, hp_lens) = utils::homopolymer_compress_with_quality(&seq_u8, &query_quals_u8);
+
+            // Align
+            let alignment = aligner.map(&hpc_seq, true, false, None, None, None);
+
+            if let Ok(mappings) = alignment {
+                if let Some(best_mapping) = mappings.first() {
+                    if let Some(ref alignment_info) = best_mapping.alignment {
+                        if let Some(ref cigar) = alignment_info.cigar {
+                            // Handle reverse complement
+                            let (final_seq, final_hp_lens) = if best_mapping.strand == minimap2::Strand::Reverse {
+                                (utils::reverse_complement(&hpc_seq), hp_lens.iter().rev().cloned().collect())
+                            } else {
+                                (hpc_seq.clone(), hp_lens.clone())
+                            };
+
+                            // Extract mapped portion
+                            let query_start = if best_mapping.strand == minimap2::Strand::Reverse {
+                                final_seq.len() - best_mapping.query_end as usize
+                            } else {
+                                best_mapping.query_start as usize
+                            };
+
+                            let query_end = if best_mapping.strand == minimap2::Strand::Reverse {
+                                final_seq.len() - best_mapping.query_start as usize
+                            } else {
+                                best_mapping.query_end as usize
+                            };
+
+                            let mapped_seq = &final_seq[query_start..query_end];
+                            let mapped_hp_lens = &final_hp_lens[query_start..query_end];
+
+                            // Build aligned sequence and HP lengths by processing CIGAR
+                            let mut ref_pos = best_mapping.target_start as usize;
+                            let mut query_pos = 0;
+                            let mut aligned_bases: Vec<Vec<u8>> = vec![Vec::new(); consensus_seq.len()];
+                            let mut aligned_hp_lens: Vec<Vec<u8>> = vec![Vec::new(); consensus_seq.len()];
+
+                            for &(length, op) in cigar.iter() {
+                                let len = length as usize;
+
+                                match op {
+                                    0 => {
+                                        // Match/mismatch: copy bases and HP lengths
+                                        for j in 0..len {
+                                            if ref_pos + j < consensus_seq.len() && query_pos + j < mapped_seq.len() {
+                                                aligned_bases[ref_pos + j].push(mapped_seq[query_pos + j]);
+                                                aligned_hp_lens[ref_pos + j].push(mapped_hp_lens[query_pos + j]);
+                                            }
+                                        }
+                                        ref_pos += len;
+                                        query_pos += len;
+                                    }
+                                    1 => {
+                                        // Insertion: add bases to current position
+                                        if ref_pos > 0 && ref_pos - 1 < consensus_seq.len() {
+                                            for j in 0..len {
+                                                if query_pos + j < mapped_seq.len() {
+                                                    aligned_bases[ref_pos - 1].push(mapped_seq[query_pos + j]);
+                                                    aligned_hp_lens[ref_pos - 1].push(mapped_hp_lens[query_pos + j]);
+                                                }
+                                            }
+                                        }
+                                        query_pos += len;
+                                    }
+                                    2 => {
+                                        // Deletion in read: skip reference positions
+                                        ref_pos += len;
+                                    }
+                                    _ => {
+                                        log::warn!("Unexpected CIGAR operation: {}", op);
+                                    }
+                                }
+                            }
+
+                            // Store aligned blocks for this read
+                            let mut this_read_blocks = Vec::new();
+                            let mut this_read_hp_lens = Vec::new();
+
+                            // Extract sequences and HP lengths for each block
+                            for block_idx in 0..num_blocks {
+                                let block_start = block_idx * block_size;
+                                let block_end = ((block_idx + 1) * block_size).min(consensus_seq.len());
+
+                                // Extract aligned bases and HP lengths for this block
+                                let mut block_seq: Vec<u8> = Vec::new();
+                                let mut block_hp: Vec<u8> = Vec::new();
+
+                                for pos in block_start..block_end {
+                                    block_seq.extend(&aligned_bases[pos]);
+                                    block_hp.extend(&aligned_hp_lens[pos]);
+                                }
+
+                                // Store in block_sequences for heterogeneity detection
+                                if !block_seq.is_empty() {
+                                    block_sequences[block_idx]
+                                        .entry(block_seq.clone())
+                                        .and_modify(|count| *count += 1)
+                                        .or_insert(1);
+
+                                    // Store HP lengths for this sequence variant
+                                    block_hp_lengths[block_idx]
+                                        .entry(block_seq.clone())
+                                        .or_insert_with(Vec::new)
+                                        .push(block_hp.clone());
+                                }
+
+                                // Store for this read
+                                this_read_blocks.push(block_seq);
+                                this_read_hp_lens.push(block_hp);
+                            }
+
+                            // Store the read alignment
+                            read_alignments.push(ReadAlignment {
+                                aligned_blocks: this_read_blocks,
+                                aligned_hp_lengths: this_read_hp_lens,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+    // Analyze each block for heterogeneity
+    let mut heterogeneous_blocks: Vec<HeterogeneousBlock> = Vec::new();
+
+    for (block_idx, seq_counts) in block_sequences.iter().enumerate() {
+        // Skip edge blocks
+        if block_idx <= edge_buffer || block_idx >= num_blocks - edge_buffer - 1 {
+            continue;
+        }
+
+        if seq_counts.is_empty() {
+            continue;
+        }
+
+        // Find max count
+        let max_count = *seq_counts.values().max().unwrap();
+
+        // Filter by count threshold
+        let mut filtered_seqs: Vec<(Vec<u8>, usize)> = seq_counts
+            .iter()
+            .filter(|(_, &count)| count >= (min_count_fraction * max_count as f64) as usize)
+            .map(|(seq, &count)| (seq.clone(), count))
+            .collect();
+
+        // Sort by count descending
+        filtered_seqs.sort_by(|a, b| b.1.cmp(&a.1));
+
+        if filtered_seqs.len() <= 1 {
+            continue;
+        }
+
+        // Get best sequence
+        let best_seq = &filtered_seqs[0].0;
+
+        // Filter by edit distance
+        let mut valid_seqs = vec![filtered_seqs[0].clone()];
+
+        for (seq, count) in filtered_seqs.iter().skip(1) {
+            let differences = levenshtein_exp(&best_seq, &seq);
+
+            // Keep if edit distance >= threshold
+            if differences >= min_edit_distance as u32 {
+                valid_seqs.push((seq.clone(), *count));
+            }
+        }
+
+        // IMPORTANT: Only keep blocks with exactly 1 alternate variant (2 total variants)
+        if valid_seqs.len() == 2 {
+            // Calculate modal HP lengths for each variant
+            let mut variant_infos = Vec::new();
+
+            for (seq, count) in valid_seqs {
+                // Get all HP length vectors for this sequence
+                let hp_length_vecs = block_hp_lengths[block_idx].get(&seq).unwrap();
+
+                // Calculate modal HP length for each position
+                let seq_len = seq.len();
+                let mut modal_hp_lengths = Vec::with_capacity(seq_len);
+
+                for pos in 0..seq_len {
+                    // Collect HP lengths at this position across all reads with this variant
+                    let mut hp_at_pos: Vec<u8> = Vec::new();
+                    for hp_vec in hp_length_vecs {
+                        if pos < hp_vec.len() {
+                            hp_at_pos.push(hp_vec[pos]);
+                        }
+                    }
+
+                    // Calculate modal HP length
+                    if !hp_at_pos.is_empty() {
+                        let mut hp_counts: HashMap<u8, usize> = HashMap::new();
+                        for &hp in &hp_at_pos {
+                            *hp_counts.entry(hp).or_insert(0) += 1;
+                        }
+                        let modal_hp = *hp_counts.iter()
+                            .max_by_key(|(_, count)| *count)
+                            .map(|(hp, _)| hp)
+                            .unwrap_or(&1);
+                        modal_hp_lengths.push(modal_hp);
+                    } else {
+                        modal_hp_lengths.push(1); // Default
+                    }
+                }
+
+                variant_infos.push(VariantInfo {
+                    sequence: seq,
+                    count,
+                    modal_hp_lengths,
+                });
+            }
+
+            heterogeneous_blocks.push(HeterogeneousBlock {
+                block_idx,
+                variants: variant_infos,
+            });
+        }
+    }
+
+    // Print debugging info if heterogeneity detected
+    if !heterogeneous_blocks.is_empty() {
+        log::debug!("========================================");
+        log::debug!("ASV {} (depth {}) has {} heterogeneous blocks:",
+            asv_idx, consensus.depth, heterogeneous_blocks.len());
+
+        for het_block in &heterogeneous_blocks {
+            let block_start = het_block.block_idx * block_size;
+            let block_end = ((het_block.block_idx + 1) * block_size).min(consensus_seq.len());
+
+            log::debug!("  Block {} (positions {}-{}):", het_block.block_idx, block_start, block_end);
+            log::debug!("    Consensus: {}", String::from_utf8_lossy(
+                &consensus_seq[block_start..block_end]));
+
+            for (rank, variant_info) in het_block.variants.iter().enumerate() {
+                let hp_str: Vec<String> = variant_info.modal_hp_lengths.iter()
+                    .map(|hp| hp.to_string())
+                    .collect();
+                log::debug!("    Variant {}: {} (count: {}, HP: {})",
+                    rank,
+                    String::from_utf8_lossy(&variant_info.sequence),
+                    variant_info.count,
+                    hp_str.join(","));
+            }
+        }
+
+        // Perform phasing analysis
+        let new_consensuses = perform_phasing_analysis(
+            asv_idx,
+            consensus,
+            &heterogeneous_blocks,
+            &read_alignments,
+            block_size,
+            min_haplotype_fraction,
+        );
+
+        log::debug!("========================================");
+        return new_consensuses;
+    }
+
+    Vec::new()
+}
+
+/// Perform phasing analysis for reads with heterogeneous blocks
+/// Returns new consensus sequences for haplotypes with >10% abundance
+fn perform_phasing_analysis(
+    asv_idx: usize,
+    consensus: &ConsensusSequence,
+    heterogeneous_blocks: &[HeterogeneousBlock],
+    read_alignments: &[ReadAlignment],
+    block_size: usize,
+    min_haplotype_fraction: f64,
+) -> Vec<ConsensusSequence> {
+    // Map each read to its haplotype signature
+    let mut haplotype_counts: HashMap<HaplotypeSignature, usize> = HashMap::new();
+
+    for read_alignment in read_alignments {
+        let mut signature = Vec::new();
+        let mut valid_read = true;
+
+        // For each heterogeneous block, determine which variant this read has
+        for het_block in heterogeneous_blocks {
+            let block_idx = het_block.block_idx;
+
+            // Get this read's sequence at this block
+            if block_idx >= read_alignment.aligned_blocks.len() {
+                valid_read = false;
+                break;
+            }
+
+            let read_block_seq = &read_alignment.aligned_blocks[block_idx];
+
+            // Find which variant (if any) this read perfectly matches
+            let mut matched_variant_idx = None;
+            for (variant_idx, variant_info) in het_block.variants.iter().enumerate() {
+                if read_block_seq == &variant_info.sequence {
+                    matched_variant_idx = Some(variant_idx);
+                    break;
+                }
+            }
+
+            // Only keep reads that match a variant at this block
+            if let Some(variant_idx) = matched_variant_idx {
+                signature.push((block_idx, variant_idx));
+            } else {
+                valid_read = false;
+                break;
+            }
+        }
+
+        // If read matched all heterogeneous blocks, count its haplotype
+        if valid_read && !signature.is_empty() {
+            *haplotype_counts.entry(signature).or_insert(0) += 1;
+        }
+    }
+
+    let mut new_consensuses = Vec::new();
+
+    // Output phasing results and generate new consensus sequences
+    if !haplotype_counts.is_empty() {
+        let total_reads: usize = haplotype_counts.values().sum();
+        log::debug!("  Phasing Analysis:");
+        log::debug!("  {} unique haplotypes found from {} reads",
+            haplotype_counts.len(),
+            total_reads);
+
+        // Sort haplotypes by count
+        let mut haplotypes: Vec<_> = haplotype_counts.iter().collect();
+        haplotypes.sort_by(|a, b| b.1.cmp(a.1));
+
+        for (rank, (signature, count)) in haplotypes.iter().enumerate() {
+            let fraction = **count as f64 / total_reads as f64;
+            let sig_str: Vec<String> = signature
+                .iter()
+                .map(|(block, variant)| format!("B{}:V{}", block, variant))
+                .collect();
+            log::debug!("    Haplotype {}: {} (count: {}, fraction: {:.3})",
+                rank + 1,
+                sig_str.join(", "),
+                count,
+                fraction);
+
+            // Generate new consensus for haplotypes with sufficient abundance
+            // Skip the first haplotype (rank 0) as it's likely the original consensus
+            if rank > 0 && fraction >= min_haplotype_fraction {
+                let new_consensus = generate_variant_consensus(
+                    asv_idx,
+                    consensus,
+                    signature,
+                    heterogeneous_blocks,
+                    **count,
+                    block_size,
+                    rank,
+                );
+                new_consensuses.push(new_consensus);
+                log::debug!("      -> Generated new consensus variant");
+            }
+        }
+    } else {
+        log::debug!("  No reads matched all heterogeneous block variants");
+    }
+
+    new_consensuses
+}
+
+/// Generate a new consensus sequence by swapping heterogeneous blocks with variant sequences
+fn generate_variant_consensus(
+    parent_asv_idx: usize,
+    parent_consensus: &ConsensusSequence,
+    haplotype_signature: &HaplotypeSignature,
+    heterogeneous_blocks: &[HeterogeneousBlock],
+    depth: usize,
+    block_size: usize,
+    variant_rank: usize,
+) -> ConsensusSequence {
+    // Start with a copy of the parent consensus sequence
+    let mut new_sequence = parent_consensus.sequence.clone();
+    let mut new_hp_lengths = parent_consensus.hp_lengths.clone();
+
+    // Swap out each heterogeneous block with the variant sequence
+    for (block_idx, variant_idx) in haplotype_signature {
+        let het_block = heterogeneous_blocks.iter()
+            .find(|hb| hb.block_idx == *block_idx)
+            .expect("Heterogeneous block not found");
+
+        let variant_info = &het_block.variants[*variant_idx];
+
+        // Calculate block boundaries
+        let block_start = *block_idx * block_size;
+        let block_end = ((*block_idx + 1) * block_size).min(new_sequence.len());
+
+        // Replace the block sequence
+        // Note: variant sequences may include insertions, so length can differ
+        let original_block_len = block_end - block_start;
+        let variant_len = variant_info.sequence.len();
+
+        if variant_len == original_block_len {
+            // Simple replacement - same length
+            new_sequence[block_start..block_end].copy_from_slice(&variant_info.sequence);
+            new_hp_lengths[block_start..block_end].copy_from_slice(&variant_info.modal_hp_lengths);
+        } else {
+            // Handle length differences (insertions/deletions)
+            // Remove original block and insert variant
+            let mut temp_seq = Vec::new();
+            let mut temp_hp = Vec::new();
+
+            temp_seq.extend_from_slice(&new_sequence[..block_start]);
+            temp_seq.extend_from_slice(&variant_info.sequence);
+            temp_seq.extend_from_slice(&new_sequence[block_end..]);
+
+            temp_hp.extend_from_slice(&new_hp_lengths[..block_start]);
+            temp_hp.extend_from_slice(&variant_info.modal_hp_lengths);
+            temp_hp.extend_from_slice(&new_hp_lengths[block_end..]);
+
+            new_sequence = temp_seq;
+            new_hp_lengths = temp_hp;
+        }
+    }
+
+    // Create new consensus with modified sequence
+    let new_id = parent_asv_idx * 1000 + variant_rank; // Unique ID based on parent
+    let mut new_consensus = ConsensusSequence::new(
+        new_sequence,
+        new_hp_lengths,
+        depth,
+        new_id,
+        Vec::new(), // Empty cluster for now
+    );
+
+    // Decompress for downstream use
+    new_consensus.decompress();
+
+    new_consensus
+}
+
+/// Check for within-ASV heterogeneity by analyzing 50bp blocks of aligned reads
+/// Main entry point that processes all ASVs in parallel
+pub fn check_asv_heterogeneity(
+    twin_reads: &[TwinRead],
+    consensuses: &mut Vec<ConsensusSequence>,
+    _args: &Cli,
+) {
+    let max_reads_per_asv = 500;
+    let block_size = 50;
+    let min_count_fraction = 0.15; // 15% of max count
+    let min_edit_distance = 1;
+    let edge_buffer = 1; // Skip first and last block
+    let min_haplotype_fraction = 0.10; // 10% minimum abundance for new variants
+
+    log::info!("Checking for within-ASV heterogeneity using 50bp blocks");
+
+    // Mutex for collecting new consensus sequences from parallel iterations
+    let new_consensuses_mutex: Mutex<Vec<ConsensusSequence>> = Mutex::new(Vec::new());
+
+    // Process each consensus in parallel
+    consensuses.par_iter().enumerate().for_each(|(asv_idx, consensus)| {
+        let new_variants = check_single_asv_heterogeneity(
+            asv_idx,
+            consensus,
+            twin_reads,
+            max_reads_per_asv,
+            block_size,
+            min_count_fraction,
+            min_edit_distance,
+            edge_buffer,
+            min_haplotype_fraction,
+        );
+
+        // Collect any new consensuses
+        if !new_variants.is_empty() {
+            let mut new_consensuses = new_consensuses_mutex.lock().unwrap();
+            new_consensuses.extend(new_variants);
+        }
+    });
+
+    // Append new variant consensuses to the main list
+    let new_consensuses = new_consensuses_mutex.into_inner().unwrap();
+    let num_new_variants = new_consensuses.len();
+
+    if num_new_variants > 0 {
+        log::info!("Generated {} new low-frequency variant consensuses from heterogeneity analysis", num_new_variants);
+        consensuses.extend(new_consensuses);
+    }
+
+    log::info!("Heterogeneity check complete: {} total ASVs", consensuses.len());
 }

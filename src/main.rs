@@ -7,9 +7,12 @@ use savont::cli;
 use savont::constants::*;
 use savont::kmer_comp;
 use savont::classify;
+use savont::seeding;
 use savont::seq_parse;
 use savont::types;
 use savont::alignment;
+use savont::types::ConsensusSequence;
+use savont::types::decode_kmer48;
 use savont::utils::*;
 use savont::chimera;
 use savont::taxonomy;
@@ -106,17 +109,31 @@ fn run_cluster(args: &cli::ClusterArgs, cli_args: &cli::Cli) {
         return;
     }
     let chimeras = chimera::detect_chimeras(&consensuses, &args);
-    let consensuses = chimera::filter_chimeras(consensuses, &chimeras);
+    let mut consensuses = chimera::filter_chimeras(consensuses, &chimeras);
     log_memory_usage(true, "STAGE 4: Filtered chimeric consensus sequences");
 
-    log::info!("Final consensus count after all filtering: {}", consensuses.len());
+    log::info!("Final consensus count after chimera filtering: {}", consensuses.len());
 
-    // Write final consensus sequences after chimera filtering
+    // Check for within-ASV heterogeneity
+    if args.phase_heterogeneous {
+        log::info!("Checking for heterogeneous ASVs to phase...");
+        alignment::check_asv_heterogeneity(&twin_reads, &mut consensuses, &args);
+    }
+
+    // Refine ASV depths using EM algorithm on read-level mappings
+    alignment::refine_asv_depths_with_em(&twin_reads, &mut consensuses, &args, &temp_dir);
+    log_memory_usage(true, "STAGE 5: Refined ASV depths with EM algorithm");
+
+    log::info!("Final consensus count after EM refinement: {}", consensuses.len());
+
+    // Write final consensus sequences after EM refinement
     let output_dir = std::path::PathBuf::from(&args.output_dir);
     let final_fasta = output_dir.join(ASV_FILE);
     alignment::write_consensus_fasta(&consensuses, &final_fasta, "final")
         .expect(format!("Failed to write {}", ASV_FILE).as_str());
     log::info!("Wrote {} final consensus sequences to {}", consensuses.len(), ASV_FILE);
+
+    debug_consensus_twin_read(&kmer_info, &consensuses, args);
 
     // Write final cluster information
     let final_clusters = output_dir.join("final_clusters.tsv");
@@ -371,4 +388,24 @@ fn get_twin_reads_from_kmer_info(
     let mut twin_reads_raw = kmer_comp::twin_reads_from_snpmers(kmer_info, &args);
     twin_reads_raw.sort_by(|a,b| b.est_id.unwrap_or(100.0).partial_cmp(&a.est_id.unwrap_or(100.0)).unwrap());
     return twin_reads_raw;
+}
+
+fn debug_consensus_twin_read(kmer_info: &types::KmerGlobalInfo, consensuses: &[ConsensusSequence], args: &cli::ClusterArgs) {
+
+    use std::collections::HashSet;
+    let mut snpmer_set = HashSet::default();
+    for snpmer_i in kmer_info.snpmer_info.iter(){
+        let k = snpmer_i.k as usize;
+        let snpmer1 = snpmer_i.split_kmer as u64 | ((snpmer_i.mid_bases[0] as u64) << (k-1) );
+        let snpmer2 = snpmer_i.split_kmer as u64 | ((snpmer_i.mid_bases[1] as u64) << (k-1) );
+        snpmer_set.insert(snpmer1);
+        snpmer_set.insert(snpmer2);
+    }
+
+    for (i,consensus) in consensuses.iter().enumerate() {
+        log::debug!("Consensus ID: {}, Index {}, Depth: {}, Length: {}", consensus.id, i, consensus.depth, consensus.decompressed_sequence.as_ref().unwrap().len());
+        let tr_rep = seeding::get_twin_read_syncmer(consensus.decompressed_sequence.as_ref().unwrap().clone(), None, args.kmer_size, args.c, &snpmer_set, String::new()).unwrap();
+        let snpmers = tr_rep.snpmers_vec().into_iter().map(|(pos, kmer48)| (pos, decode_kmer48(kmer48, args.kmer_size as u8))).collect::<Vec<_>>();
+        log::debug!("SNPmer bases are: {:?}", snpmers);
+    }
 }

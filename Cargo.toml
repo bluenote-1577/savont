@@ -35,6 +35,8 @@ block-aligner = { version = "0.5" }
 clap-markdown = { git = "https://github.com/bluenote-1577/clap-markdown.git" }
 minimap2 = "0.1.28"
 spoa_rs = "0.1"
+triple_accel = "0.4"
+
 
 [features]
 default = ["avx2"]

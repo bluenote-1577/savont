@@ -170,3 +170,30 @@ pub fn homopolymer_compress_with_quality(seq: &[u8], qualities: &[u8]) -> (Vec<u
 
     (hpc_seq, hpc_qualities, hp_lengths)
 }
+
+/// Expand binned quality scores to match sequence length
+/// Takes a quality sequence iterator, multiplies by 3, adds 33 offset,
+/// expands by bin_size, and adjusts to match sequence length
+pub fn expand_binned_qualities_from_iter<I>(qual_iter: I, seq_len: usize, bin_size: usize) -> Vec<u8>
+where
+    I: Iterator<Item = u8>,
+{
+    // Multiply quality by 3 and add 33 (Phred+33 offset)
+    let qual_u8: Vec<u8> = qual_iter.map(|x| (x as u8) * 3 + 33).collect();
+
+    // Expand each quality by bin_size
+    let mut expanded_quals: Vec<u8> = qual_u8
+        .iter()
+        .flat_map(|&x| vec![x; bin_size])
+        .collect();
+
+    // Adjust to match sequence length
+    if expanded_quals.len() > seq_len {
+        expanded_quals.truncate(seq_len);
+    } else if expanded_quals.len() < seq_len {
+        let last_qual = *expanded_quals.last().unwrap_or(&33);
+        expanded_quals.extend(vec![last_qual; seq_len - expanded_quals.len()]);
+    }
+
+    expanded_quals
+}

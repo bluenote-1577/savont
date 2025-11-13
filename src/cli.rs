@@ -72,6 +72,11 @@ pub struct ClusterArgs {
     #[arg(short, long, default_value_t=0., help_heading = CLI_HEADINGS[1])]
     pub bloom_filter_size: f64,
 
+    /// Minimum depth required for sequences with Ns to be included in output
+    #[arg(short, long, default_value_t=250, help_heading = CLI_HEADINGS[1])]
+    pub n_depth_cutoff: usize,
+
+
     /// Use more aggressive k-mer filtering (faster but may be non-deterministic)
     #[arg(long, help_heading = CLI_HEADINGS[1], hide = true)]
     pub aggressive_bloom: bool,
@@ -99,6 +104,10 @@ pub struct ClusterArgs {
     /// Do not assume 16S full-length reads
     #[arg(long, help_heading = CLI_HEADINGS[2])]
     pub not_full_16s: bool,
+
+    /// Try phasing heterogeneous clusters
+    #[arg(long, help_heading = CLI_HEADINGS[2])]
+    pub phase_heterogeneous: bool,
 }
 
 #[derive(Parser, Debug, Clone)]

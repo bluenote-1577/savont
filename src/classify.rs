@@ -331,4 +331,30 @@ pub fn classify(args: &cli::ClassifyArgs, db: &taxonomy::Database) {
         classifications.iter().filter(|c| c.taxonomy.is_some()).count(),
         classifications.len());
 
+    // Classified X species at species and genus level
+    log::info!("Classified {}/{} ASVs at species level",
+        classifications.iter().filter(|c| c.taxonomy.is_some()).count(),
+        classifications.iter()
+            .filter(|c| {
+                if let Some(tax) = &c.taxonomy {
+                    !tax.species.is_empty() && !tax.species.contains("UNCLASSIFIED")
+                } else {
+                    false
+                }
+
+            })
+            .count());
+
+    log::info!("Classified {}/{} ASVs at genus level",
+        classifications.iter().filter(|c| c.taxonomy.is_some()).count(),
+        classifications.iter()
+            .filter(|c| {
+                if let Some(tax) = &c.taxonomy {
+                    !tax.genus.is_empty() && !tax.genus.contains("UNCLASSIFIED")
+                } else {
+                    false
+                }
+            })
+            .count());
+
 }
