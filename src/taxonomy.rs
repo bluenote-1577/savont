@@ -471,7 +471,7 @@ pub fn write_asv_mappings(
     // Write header
     writeln!(
         file,
-        "asv_header\tdepth\tmapping_length\talignment_identity\tnumber_mismatches\ttax_id\tspecies\tgenus\treference"
+        "asv_header\tdepth\talignment_identity\tnumber_mismatches\ttax_id\tspecies\tgenus\treference"
     )?;
 
     for classification in classifications {
