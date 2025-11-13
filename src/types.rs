@@ -25,7 +25,6 @@
 //SOFTWARE.
 //******************************
 
-use block_aligner::cigar::Operation;
 use smallvec::SmallVec;
 use fxhash::FxHashSet;
 use serde::{Deserialize, Serialize};
@@ -35,8 +34,6 @@ use fxhash::FxHashMap;
 use std::hash::{BuildHasherDefault, Hasher};
 use std::path::PathBuf;
 use bio_seq::prelude::*;
-use rust_lapper::Lapper;
-use block_aligner::cigar::OpLen;
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 
@@ -745,18 +742,6 @@ pub fn bits_to_ascii(bit_rep: u8) -> u8{
 }
 
 
-#[derive(Debug, Clone)]
-pub struct MappingInfo {
-    pub median_depth: f64,
-    pub minimum_depth: f64,
-    pub max_alignment_boundaries: Option<Lapper<u32, SmallTwinOl>>,
-    //pub max_mapping_boundaries: Option<Lapper<u32, BareMappingOverlap>>,
-    pub max_mapping_boundaries: Option<Vec<(BareInterval, BareMappingOverlap)>>,
-    //pub kmer_counts: Vec<u32>,
-    pub present: bool,
-    pub length: usize,
-}
-
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct BareMappingOverlap{
     pub snpmer_identity: Fraction,
@@ -774,13 +759,7 @@ pub struct TwoCycle {
 }
 
 
-#[derive(Debug, Clone,  Default)]
-pub struct SmallTwinOl{
-    pub query_id: u32,
-    pub snpmer_identity: f32,
-    pub reverse: bool,
-    pub alignment_result: Option<AlignmentResult>
-}
+
 
 #[derive(Debug, Clone, PartialEq, Default, Eq)]
 pub struct BareInterval{
@@ -805,14 +784,6 @@ impl PartialOrd for BareInterval
     #[inline]
     fn partial_cmp(&self, other: &BareInterval) -> Option<Ordering> {
         Some(self.cmp(other))
-    }
-}
-
-impl Eq for SmallTwinOl{}
-
-impl PartialEq for SmallTwinOl{
-    fn eq(&self, other: &Self) -> bool{
-        self.query_id == other.query_id && self.snpmer_identity == other.snpmer_identity && self.reverse == other.reverse 
     }
 }
 
@@ -873,60 +844,6 @@ pub struct OverlapAdjMap {
     pub adj_map: FxHashMap<NodeIndex, Vec<NodeIndex>>,
 }
 
-#[derive(Debug, Clone, PartialEq, Default)]
-pub struct OpLenVec{
-    pub op_vec: Vec<Operation>,
-    pub len_vec: Vec<u32>,
-}
-
-impl OpLenVec{
-    pub fn new(cigar_vec: Vec<OpLen>) -> Self{
-        let mut op_vec = Vec::new();
-        let mut len_vec = Vec::new();
-        let mut last_op = Operation::Sentinel;
-        for op_len in cigar_vec{
-            if op_len.op == last_op{
-                *len_vec.last_mut().unwrap() += op_len.len as u32;
-            }
-            else if (op_len.op == Operation::X || op_len.op == Operation::Eq) && last_op == Operation::M{
-                *len_vec.last_mut().unwrap() += op_len.len as u32;
-            }
-            else{
-                op_vec.push(op_len.op);
-                len_vec.push(op_len.len as u32);
-                last_op = op_len.op;
-            }
-            if last_op == Operation::X || last_op == Operation::Eq{
-                last_op = Operation::M;
-            }
-        }
-        assert!(op_vec.len() == len_vec.len());
-        OpLenVec{
-            op_vec,
-            len_vec,
-        }
-    }
-
-    pub fn len(&self) -> usize{
-        return self.op_vec.len();
-    }
-
-    pub fn iter(&self) -> impl Iterator<Item = (Operation, u32)> + '_ {
-        self.op_vec.iter()
-            .zip(self.len_vec.iter())
-            .map(|(op, len)| (*op, *len))
-    }
-}
-
-
-#[derive(Debug, Clone, Default)]
-pub struct AlignmentResult{
-    pub cigar: OpLenVec,
-    pub q_start: usize,
-    pub q_end: usize,
-    pub r_start: usize,
-    pub r_end: usize,
-}
 
 pub fn dna_seq_to_u8(slice: &Seq<Dna>) -> Vec<u8>{
     slice.iter().map(|x| x.to_char().to_ascii_uppercase() as u8).collect()

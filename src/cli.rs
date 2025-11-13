@@ -4,7 +4,7 @@ use crate::constants::CLI_HEADINGS;
 #[derive(Parser, Debug)]
 #[command(
     name = "savont",
-    about = "savont - high-resolution ASV (Amplicon Sequence Variant) generation and taxonomic profiling for ONT R10.4/HiFI long-read amplicon sequencing",
+    about = "savont - high-resolution ASV (Amplicon Sequence Variant) generation and taxonomic profiling for ONT R10.4/HiFi long-read amplicon sequencing",
     version,
     author,
     disable_help_subcommand = true,

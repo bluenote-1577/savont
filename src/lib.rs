@@ -6,7 +6,7 @@ pub mod cli;
 pub mod constants;
 //pub mod polishing_mod;
 pub mod seq_parse;
-pub mod map_processing;
+//pub mod map_processing;
 pub mod utils;
 pub mod asv_cluster;
 pub mod alignment;
