@@ -144,21 +144,21 @@ One row per ASV with mapping statistics. The best mapping reference and its corr
 2. **Deal with ambiguous ASV alignments using EM algorithm**
 3. **Filter low-identity mappings for species and genus-level classification**
 
-### Database Information
+## Database Information
 
-#### EMU Database
+### EMU Database
 
 From [Emu](https://github.com/treangenlab/emu) by Curry et al. (2022, Nature Methods)
 
 - Has more "focused" species classifications
 - Lacks breadth of SILVA
 
-#### SILVA Database (v138.2) - Non-redundant 99%
+### SILVA Database (v138.2) - Non-redundant 99%
 
 - More comprehensive than EMU, especially for understudied species
 - Species-level classifications may be split over multiple distinct species
 
-### Quality Control
+### Notes about Quality Control
 
 1. Check `asv_mappings.tsv` for ASV depth distribution
 2. Low-depth ASVs (<20 reads) may be artifacts or rare taxa
