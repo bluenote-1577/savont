@@ -133,12 +133,8 @@ One row per ASV with mapping statistics. The best mapping reference and its corr
 
 ### ASV Generation Pipeline
 
-1. **K-mer Clustering**: Initial clustering using k-mer similarity
-2. **SNPmer Refinement**: Further clustering using SNP-containing k-mers for higher resolution
-3. **Consensus Generation**: Multiple sequence alignment using POA (Partial Order Alignment) with homopolymer compression
-4. **Quality Polishing**: Infer empirical quality score -> error rate and estimate posterior probability of correct polishing. Remove low-quality sequences. 
-5. **Merging**: Combine similar ASVs based on alignment and depth criteria
-6. **Chimera Detection**: Identify and remove chimeric sequences
+1. **Consensus Generation**: Cluster reads --> Consensus via SPOA
+2. **Chimera Detection**: Identify and remove chimeric sequences
 
 ### Taxonomic Classification
 
