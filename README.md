@@ -14,7 +14,9 @@ Savont is designed for high-accuracy long-read amplicon sequencing (>98% accurac
 * Provide detailed ASV mapping information for quality control
 
 > [!NOTE]
-> Savont is optimized for long reads with >98% accuracy. For lower quality reads (e.g. R9.4 ONT data or HAC/FAST base-called data) savont may not be useful. 
+> Savont is optimized for long reads with >98% accuracy. R10.4 SUP ONT reads or HiFi are preferred.
+>
+> For lower quality reads (e.g. R9.4 ONT data or HAC/FAST base-called data) savont may **not** be useful. 
 
 ## Install
 
