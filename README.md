@@ -15,8 +15,8 @@ Savont is designed for high-accuracy long-read amplicon sequencing (>98% accurac
 
 > [!NOTE]
 > Savont is optimized for long reads with >98% accuracy. R10.4 SUP ONT reads or HiFi are preferred.
->
-> For lower quality reads (e.g. R9.4 ONT data or HAC/FAST base-called data) savont may **not** be useful. 
+> For lower quality reads (e.g. R9.4 ONT data or HAC/FAST base-called data) savont may **not** be useful.
+ 
 
 ## Install
 
@@ -48,6 +48,9 @@ savont download --location databases --emu-db
 savont download --location databases --silva-db
 
 ```
+
+> [!IMPORTANT]
+> Savont is currently optimized for full-length 16S rRNA amplicon sequencing. Use `--not-full-16s` for other amplicon sequencing types. I have not tested it on ITS / Full operon sequencing.
 
 ### Step 2: Generate ASVs from reads
 
