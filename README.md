@@ -169,6 +169,13 @@ From [Emu](https://github.com/treangenlab/emu) by Curry et al. (2022, Nature Met
 
 FORTHCOMING. 
 
+If you use SILVA or EMU databases, cite:
+
+1. Quast, Christian, et al. "The SILVA ribosomal RNA gene database project: improved data processing and web-based tools." Nucleic acids research 41.D1 (2012): D590-D596.
+
+2. Curry, Kristen D., et al. "Emu: species-level microbial community profiling of full-length 16S rRNA Oxford Nanopore sequencing data." Nature methods 19.7 (2022): 845-853.
+
+
 ## License
 
 MIT
