@@ -18,9 +18,9 @@ Savont is designed for high-accuracy long-read amplicon sequencing (>98% accurac
 > For lower quality reads (e.g. R9.4 ONT data or HAC/FAST base-called data) savont may **not** be useful.
  
 
-## Install
+## Install via conda or build from source
 
-#### Option 1: Build from source
+### Option 1: Build from source
 
 Requirements:
 1. [rust](https://www.rust-lang.org/tools/install) (tested for > v1.88) programming language
@@ -34,6 +34,13 @@ cd savont
 # Build and install
 cargo install --path .
 savont --help
+```
+
+### Option 2: Conda
+
+```sh
+mamba install -c bioconda savont
+# or use conda instead of mamba
 ```
 
 ## Quick start
