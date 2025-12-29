@@ -1,4 +1,4 @@
-# savont - Amplicon Sequencing Variants (ASVs) and taxonomic profiling for long-read amplicon 16S sequencing
+# savont - Amplicon Sequencing Variants (ASVs) and taxonomic profiling for long-read amplicon sequencing
 
 **Savont** generates **Amplicon Sequence Variants (ASVs)** from Oxford Nanopore (ONT) R10.4 or PacBio HiFi 16S rRNA amplicon sequencing data and performs taxonomic classification.
 
