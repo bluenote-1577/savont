@@ -1,6 +1,6 @@
-# savont - Amplicon Sequencing Variants (ASVs) and taxonomic profiling for long-read amplicon sequencing
+# savont - Amplicon Sequencing Variants (ASVs) and taxonomic profiling for long-read amplicon sequencing 
 
-**Savont** generates **Amplicon Sequence Variants (ASVs)** from Oxford Nanopore (ONT) R10.4 or PacBio HiFi 16S rRNA amplicon sequencing data and performs taxonomic classification.
+**Savont** generates **Amplicon Sequence Variants (ASVs)** from Oxford Nanopore (ONT) R10.4 or PacBio HiFi amplicon sequencing data. Savont can also perform taxonomic classification for prokaryotic rRNA sequencing.
 
 Unlike mapping-based approaches (e.g. Emu or ONT's epi2me workflow), savont follows the Reads -> ASV -> Classification paradigm (just like DADA2). This can lead to more confident species classifications and exact ASV mapping information that is lost from read-level analysis. 
 
@@ -70,7 +70,7 @@ savont asv --single-strand -o savont-out -t 20
 ls savont-out/final_asvs.fasta
 ```
 
-### Step 3: Classify ASVs
+### (Optional) Step 3: Classify prokaryotic rRNA ASVs
 
 ```sh
 # Classify using EMU database
@@ -142,10 +142,13 @@ One row per ASV with mapping statistics. The best mapping reference and its corr
 
 ### ASV Generation Pipeline
 
-1. **Consensus Generation**: Cluster reads --> Consensus via SPOA
-2. **Chimera Detection**: Identify and remove chimeric sequences
+Savont does the following: cluster reads --> polish and get consensus ASVs --> remove chimeric ASVs. 
+
+Savont uses novel algorithms for clustering with polymorphic markers. We also use some heuristics and statistics to deal with errors, inspired by existing ASV approaches (but adapted to long reads). 
 
 ### Taxonomic Classification
+
+Savont has built-in taxonomic profiling for prokaryotic 16S sequences. The `classify` command does the following:
 
 1. **Map ASVs to database using minimap2**
 2. **Deal with ambiguous ASV alignments using EM algorithm**
