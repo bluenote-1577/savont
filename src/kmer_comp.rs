@@ -3,7 +3,6 @@ use smallvec::SmallVec;
 use smallvec::smallvec;
 use crate::cli::ClusterArgs as Cli;
 use crate::constants::MAX_KMER_COUNT_IN_READ;
-use crate::constants::MIN_READ_LENGTH;
 use crate::constants::USE_SOLID_KMERS;
 use crate::utils;
 use rayon::prelude::*;
@@ -49,7 +48,8 @@ pub fn twin_reads_from_snpmers(kmer_info: &mut KmerGlobalInfo, args: &Cli) -> Ve
 
     let snpmer_set = Arc::new(snpmer_set);
     let twin_read_vec = Arc::new(Mutex::new(vec![]));
-    let fl16s = !args.not_full_16s;
+    let min_read_length = args.min_read_length;
+    let max_read_length = args.max_read_length;
 
     let files_owned = fastq_files.clone();
     let solid_kmers_take = std::mem::take(&mut kmer_info.solid_kmers);
@@ -57,23 +57,21 @@ pub fn twin_reads_from_snpmers(kmer_info: &mut KmerGlobalInfo, args: &Cli) -> Ve
     let arc_solid = Arc::new(solid_kmers_take);
     let arc_high_freq = Arc::new(high_freq_kmers_take);
     let num_reads_removed_repetitive = Arc::new(Mutex::new(0));
-    let fl16s = Arc::new(fl16s);
+    let arc_minrl = Arc::new(min_read_length);
+    let arc_maxrl = Arc::new(max_read_length);
 
     for fastq_file in files_owned{
         let (mut tx, rx) = spmc::channel();
-        let fl16s_clone = Arc::clone(&fl16s);
+        let min_read_length = *Arc::clone(&arc_minrl);
+        let max_read_length = *Arc::clone(&arc_maxrl);
+
         thread::spawn(move || {
             let mut reader = needletail::parse_fastx_file(fastq_file).expect("valid path");
             while let Some(record) = reader.next() {
                 let rec = record.expect("Error reading record");
                 let seq;
                 seq = rec.seq().to_vec();
-                if *fl16s_clone{
-                    if seq.len() < 1100 || seq.len() > 2000{
-                        continue;
-                    }
-                }
-                else if seq.len() < MIN_READ_LENGTH {
+                if seq.len() < min_read_length || seq.len() > max_read_length {
                     continue;
                 }
                 let id = String::from_utf8_lossy(rec.id()).to_string();

@@ -56,6 +56,14 @@ pub struct ClusterArgs {
     #[arg(short, long, default_value = "11", help_heading = CLI_HEADINGS[1], hide = true)]
     pub c: usize,
 
+    /// Minimum read length for reads 
+    #[arg(long, default_value = "1100", help_heading = CLI_HEADINGS[0])]
+    pub min_read_length: usize,
+
+    /// Maximum read length for reads
+    #[arg(long, default_value = "2000", help_heading = CLI_HEADINGS[0])]
+    pub max_read_length: usize,
+
     /// Use only forward strand k-mers (for strand-specific protocols)
     #[arg(short, long, help_heading = CLI_HEADINGS[1])]
     pub single_strand: bool,
@@ -75,6 +83,15 @@ pub struct ClusterArgs {
     /// Minimum depth required for sequences with Ns to be included in output
     #[arg(short, long, default_value_t=250, help_heading = CLI_HEADINGS[1])]
     pub n_depth_cutoff: usize,
+
+    /// Negative posterior probability threshold (natural log scale) for SNP calling. Higher = more stringent for low-quality consensuses.
+    #[arg(short, long, default_value_t=30.0, help_heading = CLI_HEADINGS[1])]
+    pub posterior_threshold_ln: f64,
+
+
+    /// Maximum number of reclustering iterations
+    #[arg(long, default_value_t=10, help_heading = CLI_HEADINGS[1])]
+    pub max_iterations_recluster: usize,
 
 
     /// Use more aggressive k-mer filtering (faster but may be non-deterministic)
@@ -100,10 +117,6 @@ pub struct ClusterArgs {
     // Legacy fields kept for compatibility with unused assembly code
     #[arg(skip)]
     pub hifi: bool,
-
-    /// Do not assume 16S full-length reads
-    #[arg(long, help_heading = CLI_HEADINGS[2])]
-    pub not_full_16s: bool,
 
     /// Try phasing heterogeneous clusters
     #[arg(long, help_heading = CLI_HEADINGS[2])]

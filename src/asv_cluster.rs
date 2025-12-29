@@ -190,20 +190,13 @@ fn find_compatible_candidates(
     // Track matches and mismatches for each candidate
     let mut candidate_stats: FxHashMap<usize, (usize, usize)> = FxHashMap::default();
 
-    // Initialize all candidates that exist in the index
-    for candidates in index.values() {
-        for &(candidate_id, _) in candidates {
-            candidate_stats.entry(candidate_id).or_insert((0, 0));
-        }
-    }
-
     // Check each query SNPmer
     for &(_pos, query_kmer) in query_snpmers {
         let query_splitmer = query_kmer.to_u64() & mask;
 
         if let Some(candidates) = index.get(&query_splitmer) {
             for &(candidate_id, candidate_kmer) in candidates {
-                let stats = candidate_stats.get_mut(&candidate_id).unwrap();
+                let stats = candidate_stats.entry(candidate_id).or_insert((0, 0));
                 if query_kmer == candidate_kmer {
                     stats.0 += 1; // matches
                 } else {
@@ -305,6 +298,7 @@ pub fn cluster_reads_by_snpmers(
         let mut local_clusters: Vec<Vec<usize>> = cluster_map.into_values().collect();
         local_clusters.sort_by(|a, b| b.len().cmp(&a.len()));
 
+        // Remove small clusters
         local_clusters.retain(|cluster| cluster.len() >= args.min_cluster_size);
 
         // Update shared data structures
@@ -504,6 +498,7 @@ fn reassign_reads_to_best_cluster(
     current_clusters: Vec<Vec<usize>>,
     twin_reads: &[TwinRead],
     k: usize,
+    args: &Cli,
 ) -> (Vec<Vec<usize>>, usize) {
     // Build consensus for each cluster
     let cluster_consensus: Vec<Vec<ConsensusSnpmer>> = current_clusters
@@ -589,7 +584,7 @@ fn reassign_reads_to_best_cluster(
 
     // Remove empty clusters
     let mut new_clusters = new_clusters.into_inner().unwrap();
-    new_clusters.retain(|cluster| !cluster.is_empty());
+    new_clusters.retain(|cluster| !cluster.is_empty() && cluster.len() >= args.min_cluster_size);
     let num_reassignments = num_reassignments.into_inner().unwrap();
 
     log::debug!("Reassignment complete: {} reads reassigned to better clusters", num_reassignments);
@@ -712,6 +707,10 @@ pub fn recluster_using_consensus_reps(
     // Step 2: Iteratively recluster until convergence
     let mut iteration = 0;
     loop {
+        if iteration >= args.max_iterations_recluster {
+            log::info!("Reached maximum reclustering iterations ({})", args.max_iterations_recluster);
+            break;
+        }
         iteration += 1;
         let total_merges = Mutex::new(0);
         let total_reassignments = Mutex::new(0);
@@ -738,7 +737,8 @@ pub fn recluster_using_consensus_reps(
             let (reassigned_clusters, num_reassignments) = reassign_reads_to_best_cluster(
                 merged_clusters,
                 twin_reads,
-                k
+                k,
+                args,
             );
 
             *total_reassignments.lock().unwrap() += num_reassignments;
@@ -788,39 +788,42 @@ pub fn recluster_using_consensus_reps(
     log::info!("Final result: {} total clusters across {} k-mer groups", final_clusters.len(), current_clusters.len());
 
     // Step 4: Debugging - Compare all final clusters and output mismatch statistics
-    log::info!("=== Debugging: Pairwise cluster comparison ===");
+    if log::log_enabled!(log::Level::Trace) {
+        log::info!("Performing detailed pairwise cluster comparison for debugging...");
+        log::info!("=== Debugging: Pairwise cluster comparison ===");
 
-    // Build consensus for each final cluster
-    let final_consensus: Vec<Vec<ConsensusSnpmer>> = final_clusters
-        .iter()
-        .map(|cluster| build_consensus_snpmers(cluster, twin_reads, k))
-        .collect();
+        // Build consensus for each final cluster
+        let final_consensus: Vec<Vec<ConsensusSnpmer>> = final_clusters
+            .iter()
+            .map(|cluster| build_consensus_snpmers(cluster, twin_reads, k))
+            .collect();
 
-    // Compare all pairs of clusters
-    for i in 0..final_clusters.len() {
-        let rep_i = final_clusters[i][0]; // First member as representative
+        // Compare all pairs of clusters
+        for i in 0..final_clusters.len() {
+            let rep_i = final_clusters[i][0]; // First member as representative
 
-        for j in (i + 1)..final_clusters.len() {
-            let rep_j = final_clusters[j][0];
+            for j in (i + 1)..final_clusters.len() {
+                let rep_j = final_clusters[j][0];
 
-            // Count matches and mismatches
-            let (matches, mismatches) = compare_consensus_snpmers(
-                &final_consensus[i],
-                &final_consensus[j]
-            );
-
-            if matches > 0 || mismatches > 0 {
-                log::debug!(
-                    "Cluster {} (rep: {}, size: {}) vs Cluster {} (rep: {}, size: {}): {} matches, {} mismatches",
-                    i, rep_i, final_clusters[i].len(),
-                    j, rep_j, final_clusters[j].len(),
-                    matches, mismatches
+                // Count matches and mismatches
+                let (matches, mismatches) = compare_consensus_snpmers(
+                    &final_consensus[i],
+                    &final_consensus[j]
                 );
+
+                if matches > 0 || mismatches > 0 {
+                    log::debug!(
+                        "Cluster {} (rep: {}, size: {}) vs Cluster {} (rep: {}, size: {}): {} matches, {} mismatches",
+                        i, rep_i, final_clusters[i].len(),
+                        j, rep_j, final_clusters[j].len(),
+                        matches, mismatches
+                    );
+                }
             }
         }
-    }
 
-    log::info!("=== End debugging ===");
+        log::info!("=== End debugging ===");
+    }
 
     // Step 5: Return flattened clusters
     final_clusters

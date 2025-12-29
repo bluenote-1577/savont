@@ -852,7 +852,7 @@ pub fn polish_consensuses(
             continue;
         }
 
-        log::debug!("Consensus {}: Trimming from {}-{} to {}-{} with min depth {}",
+        log::trace!("Consensus {}: Trimming from {}-{} to {}-{} with min depth {}",
             cluster_idx, 0, cluster_pileup.len(), start_idx, end_idx, min_coverage);
 
 
@@ -899,7 +899,7 @@ pub fn polish_consensuses(
                         log_prob_not_ref += (1.0 - error_rate).ln();
                         log_prob_ref += error_rate.ln();
 
-                        let error_rates: Vec<f64> = insertion_data.iter()
+                        let error_rates: Vec<f64> = insertion_data.iter().take(0)
                             .map(|(_, q, _)| quality_error_map.get(q).copied().unwrap_or(0.05))
                             .collect();
                         log_prob_ref += error_rates.iter().map(|&er| er.ln()).sum::<f64>();
@@ -913,9 +913,36 @@ pub fn polish_consensuses(
             let log_normalizer = log_sum_exp(log_prob_ref, log_prob_not_ref);
             let alt_posterior = log_prob_not_ref - log_normalizer;
 
-            if alt_posterior > -30.0 {
-                log::debug!("Low posterior probability at consensus {}, position {}: alternate_posterior {:.6}, log_prob_ref {:.4}, log_prob_not_ref {:.4}, depth {}, range {}-{}",
-                    cluster_idx, pileup.ref_pos, alt_posterior, log_prob_ref, log_prob_not_ref, pileup.depth(), start_idx, end_idx);
+            //if alt_posterior > -30.0 {
+            if alt_posterior > -args.posterior_threshold_ln{
+                log::debug!("Low posterior probability at consensus {}, covs: {:?},  position {}: alternate_posterior {:.6}, log_prob_ref {:.4}, log_prob_not_ref {:.4}, depth {}, range {}-{}",
+                    cluster_idx, pileup.depth_nodeletion(),  pileup.ref_pos, alt_posterior, log_prob_ref, log_prob_not_ref, pileup.depth(), start_idx, end_idx);
+                let ref_count = pileup.bases.iter().filter(|b| {
+                    if let PileupBase::Base(base, _, _) = b {
+                        *base == ref_base
+                    } else {
+                        false
+                    }
+                }).count();
+                let non_ref_base_count = pileup.depth() - ref_count;
+                log::debug!("    Reference base: {}, Ref count: {}, Non-ref count: {}", ref_base as char, ref_count, non_ref_base_count);
+                //print top 20 bases
+                let mut dbg_string = String::from("Bases: ");
+                for base_entry in pileup.bases.iter().take(20) {
+                    match base_entry {
+                        PileupBase::Base(obs_base, qual, hp_len) => {
+                            dbg_string.push_str(&format!(" Base: {} (q={}, hp={}) ", *obs_base as char, *qual, *hp_len));
+                        }
+                        PileupBase::Deletion => {
+                            dbg_string.push_str(" Deletion ");
+                        }
+                        PileupBase::Insertion(insertion_data) => {
+                            let bases: Vec<u8> = insertion_data.iter().map(|(b, _, _)| *b).collect();
+                            dbg_string.push_str(&format!(" Insertion: {} ", String::from_utf8_lossy(&bases)));
+                        }
+                    }
+                }
+                log::debug!("{}", dbg_string);
                 pileup.alt_posterior = Some(alt_posterior);
             }
 
@@ -996,13 +1023,13 @@ pub fn polish_consensuses(
 
         let consensus = &mut consensuses[i];
         if low_conf_region_left > 0 {
-            log::debug!("Consensus {}: Masking low-confidence region at start up to position {}", i, low_conf_region_left);
+            log::trace!("Consensus {}: Masking low-confidence region at start up to position {}", i, low_conf_region_left);
             for pos in 0..=low_conf_region_left {
                 consensus.sequence[pos] = b'N';
             }
         }
         if low_conf_region_right < consensus.sequence.len() {
-            log::debug!("Consensus {}: Masking low-confidence region at end from position {} to {}", i, low_conf_region_right, consensus.sequence.len());
+            log::trace!("Consensus {}: Masking low-confidence region at end from position {} to {}", i, low_conf_region_right, consensus.sequence.len());
             for pos in low_conf_region_right..consensus.sequence.len() {
                 consensus.sequence[pos] = b'N';
             }
@@ -1117,6 +1144,8 @@ pub fn merge_similar_consensuses(
         consensuses[target_idx].appended_depth += low_qual_consensus.depth;
     }
 
+    log::debug!("Merging similar consensus sequences based on alignment and depth criteria");
+
     // Align all consensus sequences to each other in parallel (using decompressed sequences)
     consensuses.par_iter().enumerate().for_each(|(query_idx, query_consensus)| {
         // Use decompressed sequence for alignment
@@ -1175,6 +1204,11 @@ pub fn merge_similar_consensuses(
                         adjusted_errors = alignment.nm as usize;
                     }
 
+                    if adjusted_errors < 2{
+                        log::debug!("Consensus {} (depth {}) maps to consensus {} (depth {}) with adjusted errors {}",
+                            consensuses[query_idx].id, consensuses[query_idx].depth, consensuses[target_idx].id, consensuses[target_idx].depth, adjusted_errors);
+                    }
+
                     mappings.lock().unwrap().push((
                         query_idx,
                         target_idx,
@@ -1211,9 +1245,20 @@ pub fn merge_similar_consensuses(
                 let mut threshold = 0.5_f64.powf((*nm as f64) * 0.75 + 1.25);
                 if *nm == 0{
                     threshold = 0.999999; // More lenient for perfect matches
+
+                    // Handle special case of identical consensuses
+                    if query_depth == target_depth{
+                        if query_idx > *t_idx{
+                            // To avoid circular merges, only allow one direction for identical consensuses
+                            return true;
+                        }
+                        else{
+                            return false;
+                        }
+                    }
                 }
 
-                log::debug!("Considering merge: Query {} (depth {}) -> Target {} (depth {}), Adjusted errors {}, Relative depth {:.4}, Threshold {:.4} => {}",
+                log::trace!("Considering merge: Query {} (depth {}) -> Target {} (depth {}), Adjusted errors {}, Relative depth {:.4}, Threshold {:.4} => {}",
                     consensuses[query_idx].id, query_depth, consensuses[*t_idx].id, target_depth, nm, relative_depth, threshold,
                     relative_depth < threshold);
 
@@ -1405,7 +1450,7 @@ pub fn refine_asv_depths_with_em(
     //debug equiv classes
 
     for (eq_class, count) in &eq_classes {
-        log::debug!("Equivalence class: ASVs {:?}, Count {}", eq_class.asv_indices, count);
+        log::trace!("Equivalence class: ASVs {:?}, Count {}", eq_class.asv_indices, count);
     }
 
     if eq_classes.is_empty() {

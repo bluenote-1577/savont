@@ -21,10 +21,10 @@ pub struct ChimeraInfo {
 /// Information about the best left and right alignments for a query
 #[derive(Debug, Clone)]
 struct BestAlignments {
-    best_left_ref: Option<usize>,
-    best_left_len: usize,
-    best_right_ref: Option<usize>,
-    best_right_len: usize,
+    best_left_refs: Vec<usize>,
+    best_left_lens: Vec<usize>,
+    best_right_refs: Vec<usize>,
+    best_right_lens: Vec<usize>,
 }
 
 /// Detect chimeric consensus sequences
@@ -58,10 +58,10 @@ pub fn detect_chimeras(
 
         // Find best left and right alignments
         let mut best_alignments = BestAlignments {
-            best_left_ref: None,
-            best_left_len: 0,
-            best_right_ref: None,
-            best_right_len: 0,
+            best_left_refs: Vec::new(),
+            best_left_lens: Vec::new(),
+            best_right_refs: Vec::new(),
+            best_right_lens: Vec::new(),
         };
 
         // Align query to each potential parent
@@ -114,18 +114,16 @@ pub fn detect_chimeras(
                                 rc,
                             );
 
-                            // Update best left alignment
-                            if left_match > best_alignments.best_left_len {
-                                best_alignments.best_left_len = left_match;
-                                best_alignments.best_left_ref = Some(ref_idx);
-                            }
+                            log::debug!("TODO REMOVE Query {} vs Ref {}: Left match: {:?}, Right match: {:?}, CS: {:?}, CIGAR: {:?}", consensuses[query_idx].id, consensuses[ref_idx].id, left_match, right_match, alignment.cs.as_ref().unwrap(), alignment.cigar_str.as_ref().unwrap()  );
 
-                            // Update best right alignment
-                            if right_match > best_alignments.best_right_len {
-                                best_alignments.best_right_len = right_match;
-                                best_alignments.best_right_ref = Some(ref_idx);
+                            if let Some(left_match) = left_match{
+                                best_alignments.best_left_lens.push(left_match);
+                                best_alignments.best_left_refs.push(ref_idx);
                             }
-
+                            if let Some(right_match) = right_match{
+                                best_alignments.best_right_lens.push(right_match);
+                                best_alignments.best_right_refs.push(ref_idx);
+                            }
                             // if query_idx == 57{
                                 // println!("Query 57 vs Ref {}: Left match: {}, Right match: {}, CS: {}", ref_idx, left_match, right_match, alignment.cs.as_ref().unwrap());
                             // }
@@ -136,51 +134,55 @@ pub fn detect_chimeras(
         }
 
         // Check if this is a chimera
-        if let (Some(left_ref), Some(right_ref)) = (best_alignments.best_left_ref, best_alignments.best_right_ref) {
-            log::debug!(
-                "Query {} best left ref: {:?}, best right ref: {:?}, Left: {}, Right: {}",
-                consensuses[query_idx].id, best_alignments.best_left_ref, best_alignments.best_right_ref, best_alignments.best_left_len, best_alignments.best_right_len
-            );
-            // Must be two different parents
-            if left_ref != right_ref {
-                // Check if parents are <99% similar
-                let parent_similarity = similarities.get(&(left_ref.min(right_ref), left_ref.max(right_ref)))
-                    .copied()
-                    .unwrap_or(0.0);
+        for (&left_ref, &left_len) in best_alignments.best_left_refs.iter().zip(best_alignments.best_left_lens.iter()) {
+            for (&right_ref, &right_len) in best_alignments.best_right_refs.iter().zip(best_alignments.best_right_lens.iter()) {
+                log::debug!(
+                    "Query {} alignment: Left ref {}, left len {}, Right ref {}, right len {}",
+                    consensuses[query_idx].id, consensuses[left_ref].id, left_len,
+                    consensuses[right_ref].id, right_len
+                );
+                // Must be two different parents
+                if left_ref != right_ref {
+                    // Check if parents are <99% similar
+                    let parent_similarity = similarities.get(&(left_ref.min(right_ref), left_ref.max(right_ref)))
+                        .copied()
+                        .unwrap_or(0.0);
 
-                if parent_similarity < 0.97 || (parent_similarity < 99.5 && (consensuses[left_ref].depth > query_depth * 10) && consensuses[right_ref].depth > query_depth * 10) {
-                    // Check if coverage is >=95%
-                    let total_match = best_alignments.best_left_len + best_alignments.best_right_len;
-                    let coverage_fraction = total_match as f64 / query_len as f64;
+                    if parent_similarity < 0.97 || (parent_similarity < 99.5 && (consensuses[left_ref].depth > query_depth * 10) && consensuses[right_ref].depth > query_depth * 10) {
+                        // Check if coverage is >=95%
+                        let total_match = left_len + right_len;
+                        let coverage_fraction = total_match as f64 / query_len as f64;
 
-                    if coverage_fraction >= 0.9 * parent_similarity && (coverage_fraction < 1.5 || (parent_similarity < 0.99 && coverage_fraction < 1.8)) {
-                        log::info!(
-                            "Detected chimera: consensus {} (depth {}) = left_parent {} + right_parent {} (coverage: {:.2}%, parent similarity: {:.2}%)",
-                            consensuses[query_idx].id, query_depth, left_ref, right_ref, coverage_fraction * 100.0, parent_similarity * 100.0
-                        );
+                        if coverage_fraction >= 0.9 * parent_similarity && (coverage_fraction < 1.5 || (parent_similarity < 0.99 && coverage_fraction < 1.8)) {
+                            log::debug!(
+                                "Detected chimera: consensus {} (depth {}) = left_parent {} + right_parent {} (coverage: {:.2}%, parent similarity: {:.2}%)",
+                                consensuses[query_idx].id, query_depth, consensuses[left_ref].id, consensuses[right_ref].id, coverage_fraction * 100.0, parent_similarity * 100.0
+                            );
 
-                        chimeras.lock().unwrap().push(ChimeraInfo {
-                            query_idx,
-                            left_parent_idx: left_ref,
-                            right_parent_idx: right_ref,
-                            left_match_len: best_alignments.best_left_len,
-                            right_match_len: best_alignments.best_right_len,
-                            query_len,
-                            coverage_fraction,
-                        });
+                            chimeras.lock().unwrap().push(ChimeraInfo {
+                                query_idx,
+                                left_parent_idx: left_ref,
+                                right_parent_idx: right_ref,
+                                left_match_len: left_len,
+                                right_match_len: right_len,
+                                query_len,
+                                coverage_fraction,
+                            });
+                            break;
+                        }
+                        else{
+                            log::debug!(
+                                "Consensus {} failed coverage check: coverage {:.2}%, required {:.2}%. Parent similarity {:.2}%",
+                                consensuses[query_idx].id, coverage_fraction * 100.0, 95.0, parent_similarity * 100.0
+                            );
+                        }
                     }
                     else{
                         log::debug!(
-                            "Consensus {} failed coverage check: coverage {:.2}%, required {:.2}%. Parent similarity {:.2}%",
-                            consensuses[query_idx].id, coverage_fraction * 100.0, 95.0, parent_similarity * 100.0
+                            "Consensus {} failed parent similarity check: similarity {:.2}%, required <99%",
+                            consensuses[query_idx].id, parent_similarity * 100.0
                         );
                     }
-                }
-                else{
-                    log::debug!(
-                        "Consensus {} failed parent similarity check: similarity {:.2}%, required <99%",
-                        consensuses[query_idx].id, parent_similarity * 100.0
-                    );
                 }
             }
         }
@@ -204,11 +206,12 @@ fn calculate_match_lengths(
     target_start: usize,
     target_end: usize,
     rc: bool,
-) -> (usize, usize) {
+) -> (Option<usize>, Option<usize>) {
     
     // Track match positions in the query
     let mut left_max_perfect = 0;
     let mut right_max_perfect = 0;
+    let pcr_slack = 15;
 
     // Process CIGAR to find matching positions
     {
@@ -230,8 +233,9 @@ fn calculate_match_lengths(
                                 left_max_perfect += 1;
                             }
                             else{
+                                // Elevated error rates near the edges: PCR primer mismatches and polishing issues...
                                 num_errs += 1;
-                                if num_errs > 1{
+                                if num_errs > 1 && query_pos + i >= pcr_slack{
                                     break;
                                 }
                             }
@@ -276,7 +280,7 @@ fn calculate_match_lengths(
                         }
                         else{
                             num_errs += 1;
-                            if num_errs > 1{
+                            if num_errs > 1 && query_pos_right - i + pcr_slack <= query_seq.len(){
                                 break;
                             }
                         }
@@ -299,19 +303,22 @@ fn calculate_match_lengths(
         }
     }
 
+    let mut right_max_perfect_opt = Some(right_max_perfect);
+    let mut left_max_perfect_opt = Some(left_max_perfect);
+
     if right_max_perfect < 100 || left_max_perfect >= right_max_perfect {
-        right_max_perfect = 0;
+        right_max_perfect_opt = None;
     }
 
     if left_max_perfect < 100 || right_max_perfect >= left_max_perfect {
-        left_max_perfect = 0;
+        left_max_perfect_opt = None;
     }
 
     if rc{
-        (right_max_perfect, left_max_perfect)
+        (right_max_perfect_opt, left_max_perfect_opt)
     }
     else{
-        (left_max_perfect, right_max_perfect)
+        (left_max_perfect_opt, right_max_perfect_opt)
     }
 }
 

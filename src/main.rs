@@ -403,9 +403,9 @@ fn debug_consensus_twin_read(kmer_info: &types::KmerGlobalInfo, consensuses: &[C
     }
 
     for (i,consensus) in consensuses.iter().enumerate() {
-        log::debug!("Consensus ID: {}, Index {}, Depth: {}, Length: {}", consensus.id, i, consensus.depth, consensus.decompressed_sequence.as_ref().unwrap().len());
+        log::trace!("Consensus ID: {}, Index {}, Depth: {}, Length: {}", consensus.id, i, consensus.depth, consensus.decompressed_sequence.as_ref().unwrap().len());
         let tr_rep = seeding::get_twin_read_syncmer(consensus.decompressed_sequence.as_ref().unwrap().clone(), None, args.kmer_size, args.c, &snpmer_set, String::new()).unwrap();
         let snpmers = tr_rep.snpmers_vec().into_iter().map(|(pos, kmer48)| (pos, decode_kmer48(kmer48, args.kmer_size as u8))).collect::<Vec<_>>();
-        log::debug!("SNPmer bases are: {:?}", snpmers);
+        log::trace!("SNPmer bases are: {:?}", snpmers);
     }
 }
