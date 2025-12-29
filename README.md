@@ -8,7 +8,7 @@ Unlike mapping-based approaches (e.g. Emu or ONT's epi2me workflow), savont foll
 
 Savont is designed for high-accuracy long-read amplicon sequencing (>98% accuracy). It can:
 
-* Generate high-resolution ASVs from ONT R10.4 or PacBio HiFi 16S amplicon reads
+* Generate high-resolution ASVs from ONT R10.4 or PacBio HiFi amplicon reads (e.g., full-length 16S or rRNA operon)
 * Classify ASVs against EMU or SILVA reference databases
 * Output species-level and genus-level taxonomic abundance tables
 * Provide detailed ASV mapping information for quality control
@@ -16,7 +16,6 @@ Savont is designed for high-accuracy long-read amplicon sequencing (>98% accurac
 > [!NOTE]
 > Savont is optimized for long reads with >98% accuracy. R10.4 SUP ONT reads or HiFi are preferred.
 > For lower quality reads (e.g. R9.4 ONT data or HAC/FAST base-called data) savont may **not** be useful.
- 
 
 ## Install via conda or build from source
 
@@ -56,14 +55,14 @@ savont download --location databases --silva-db
 
 ```
 
-> [!IMPORTANT]
-> Savont is currently optimized for full-length 16S rRNA amplicon sequencing. Use `--not-full-16s` for other amplicon sequencing types. I have not tested it on ITS / Full operon sequencing.
-
 ### Step 2: Generate ASVs from reads
 
 ```sh
-# Cluster reads into ASVs
-savont asv reads.fastq.gz -o savont-out -t 20
+# Cluster full-length 16S rRNA reads into ASVs
+savont asv reads.fastq.gz -o savont-out -t 20 --min-read-length 1100 --max-read-length 2000 
+
+# Cluster full bacterial rRNA operon amplicons into ASVs
+savont asv reads.fastq.gz -o savont-out -t 20 --min-read-length 4000 --max-read-length 6500 
 
 # For single-stranded protocols
 savont asv --single-strand -o savont-out -t 20
@@ -91,7 +90,7 @@ savont classify -i savont-out --emu-db databases/emu_default \
 
 The `savont asv` command produces:
 
-1. **asvs.fasta** - Final ASV sequences (high-quality, chimera-filtered)
+1. **final_asvs.fasta** - Final ASV sequences (high-quality, chimera-filtered)
 2. **final_clusters.tsv** - Cluster assignments mapping reads to ASVs
 3. **temp/** - Directory containing intermediate files:
 
@@ -171,6 +170,10 @@ From [Emu](https://github.com/treangenlab/emu) by Curry et al. (2022, Nature Met
 1. Check `asv_mappings.tsv` for ASV depth distribution
 2. Low-depth ASVs (<20 reads) may be artifacts or rare taxa
 3. Examine unmapped ASVs in `asv_mappings.tsv` or the log.
+
+### CHANGELOG
+
+See [the changelog.](CHANGELOG.md)
 
 ## Citation
 
