@@ -8,7 +8,7 @@ pub const SAMPLING_RATE_COV: usize = 10;
 pub const MINIMIZER_END_NTH_COV: usize = 30;
 pub const MINIMIZER_END_NTH_OVERLAP: usize = 30;
 pub const QUANTILE_UNITIG_WEIGHT: f64 = 0.50;
-pub const MID_BASE_THRESHOLD_READ: u8 = 23; // 98%
+pub const MID_BASE_THRESHOLD_READ: u8 = 25; // 98%
 pub const MID_BASE_THRESHOLD_INITIAL: u8 = 10; // 90%
 pub const MAX_BUBBLE_UNITIGS_FINAL_STAGE: usize = 5;
 pub const TS_DASHES_BLANK_COLONS_DOT_BLANK: &str = "%Y-%m-%d %H:%M:%S%.3f";
@@ -55,14 +55,18 @@ pub const BEAM_STEPS: usize = 10;
 pub const SAFE_LENGTH_BACK : usize = 300_000;
 pub const MAX_LENGTH_SEARCH: usize = 1_000_000;
 
+pub const MAX_SEQS_CONSENSUS: usize = 250;
+
 pub const MAX_ALLOWABLE_SNPMER_ERROR_MISC: usize = 2;
 pub const MAX_ALLOWABLE_SNPMER_ERROR_DIVIDER: usize = 200;
 
 pub const DEDUP_SNPMERS: bool = true;
 
 
-pub const CLI_HEADINGS: [&str; 3] = [
+pub const CLI_HEADINGS: [&str; 5] = [
     "Input/Output Options",
     "Clustering Parameters",
+    "Consensus Parameters",
+    "Chimera Detection Options",
     "Advanced Options",
 ];

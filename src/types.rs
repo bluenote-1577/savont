@@ -36,6 +36,7 @@ use std::path::PathBuf;
 use bio_seq::prelude::*;
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
+use std::hash::Hash;
 
 use crate::constants::ID_THRESHOLD_ITERS;
 use crate::constants::MAX_GAP_CHAINING;
@@ -48,6 +49,44 @@ pub type KmerHash32 = u32;
 pub type Snpmer64 = u64;
 pub type Splitmer64 = u64;
 pub type MultiCov = [f64; ID_THRESHOLD_ITERS];
+
+/// Represents a blockmer with its sequence and orientation
+/// Structure: [anchor k-mer (k bases)][suffix (l bases)]
+/// is_forward indicates whether the anchor is at the start (true) or end (false) of the blockmer
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Blockmer {
+    /// The full blockmer sequence (anchor + suffix) encoded in 2 bits per base
+    pub kmer: u64,
+    /// True if this blockmer is from forward strand (anchor at start, suffix at end)
+    /// False if from reverse strand (suffix at start after RC, anchor at end)
+    pub is_forward: bool,
+}
+
+impl Blockmer {
+    pub fn new(kmer: u64, is_forward: bool) -> Self {
+        Self { kmer, is_forward }
+    }
+}
+
+impl Ord for Blockmer {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        // First compare by kmer, then by orientation
+        self.kmer.cmp(&other.kmer)
+            .then(self.is_forward.cmp(&other.is_forward))
+    }
+}
+
+impl PartialOrd for Blockmer {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Hash for Blockmer {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.kmer.hash(state);
+    }
+}
 
 pub const BYTE_TO_SEQ: [u8; 256] = [
     0, 1, 2, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
@@ -93,29 +132,32 @@ impl From<u64> for Kmer48 {
     }
 }
 
-/// Consensus SNPmer statistics
-/// Contains the consensus k-mer for a splitmer position along with metadata
+/// Consensus polymorphic marker statistics
+/// Contains the consensus k-mer for a polymorphic marker (SNPmer or blockmer) along with metadata
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ConsensusSnpmer {
-    /// Median position along the read where this SNPmer occurs
+pub struct ConsensusPoly {
+    /// Median position along the read where this polymorphic marker occurs
     pub position: u32,
-    /// The splitmer (k-mer with middle base masked out)
+    /// The splitmer (anchor k-mer): masked k-mer for SNPmers, anchor k-mer for blockmers
     pub splitmer: u64,
-    /// The consensus full k-mer (most common variant)
+    /// The consensus full k-mer (most common variant): full SNPmer or full blockmer
     pub kmer: Kmer48,
     /// Number of times this consensus k-mer was observed
     pub count: u32,
 }
 
-impl ConsensusSnpmer {
+impl ConsensusPoly {
     pub fn new(position: u32, splitmer: u64, kmer: Kmer48, count: u32) -> Self {
         Self { position, splitmer, kmer, count }
     }
 }
 
+// Type alias for backwards compatibility
+pub type ConsensusSnpmer = ConsensusPoly;
+
 /// Consensus sequence with depth information
 /// Contains the consensus sequence and the number of reads used to generate it
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ConsensusSequence {
     /// The HPC consensus sequence
     pub sequence: Vec<u8>,
@@ -132,7 +174,15 @@ pub struct ConsensusSequence {
 
     pub low_quality_positions: Vec<usize>,
 
+    pub chimera_score: Option<i64>,
+
     pub id: usize,
+
+    pub unambig_best_read_map_count: Option<usize>,
+
+    pub ambig_read_map_count: Option<usize>,
+
+    pub num_map_leq_10nm: Option<usize>,
 }
 
 impl ConsensusSequence {
@@ -145,7 +195,11 @@ impl ConsensusSequence {
             appended_depth: 0,
             low_quality_positions: Vec::new(),
             cluster,
-            id
+            chimera_score: None,
+            id,
+            unambig_best_read_map_count: None,
+            ambig_read_map_count: None,
+            num_map_leq_10nm: None,
         }
     }
 
@@ -327,13 +381,16 @@ pub type Fraction = f32;
 pub struct TwinRead {
     //pub minimizers: Vec<(usize, u64)>,
     pub minimizer_positions: Vec<u32>,
-    //pub minimizer_kmers: Vec<Kmer48>,
+    pub minimizer_kmers: Vec<Kmer48>,
     //pub snpmers: Vec<(usize, u64)>,
-    //pub snpmer_kmers: Vec<Kmer48>,
+    pub snpmer_kmers: Vec<Kmer48>,
     pub snpmer_positions: Vec<u32>,
+    pub blockmer_positions: Vec<u32>,
+    pub blockmer_canonical: Vec<bool>,
     pub id: String,
     pub base_id: String,
     pub k: u8,
+    pub l: u8,
     pub base_length: usize,
     pub dna_seq: Seq<Dna>,
     pub qual_seq: Option<Seq<QualCompact3>>,
@@ -505,6 +562,55 @@ fn reverse_bit_pairs(n: u64, k: usize) -> u64 {
 impl TwinRead{
 
     #[inline]
+    pub fn kmer_from_position_canonical(&self, pos:u32, k: usize, canonical: bool) -> Kmer48{
+        let pos = pos as usize;
+
+        //match various values of k from 17 - 23, odd
+        //bio-seq stores CA = 0001.
+        //our representation is CA = 0100.
+        // Internally, we want CA = 8 HEX = 0100. So 
+        let kmer = match k{
+
+            13 => {
+                reverse_bit_pairs(Kmer::<Dna, 13, u64>::unsafe_from_seqslice(&self.dna_seq[pos..pos + k]).bs, k)
+            }
+            15 => {
+                reverse_bit_pairs(Kmer::<Dna, 15, u64>::unsafe_from_seqslice(&self.dna_seq[pos..pos + k]).bs, k)
+            }
+            17 => {
+                reverse_bit_pairs(Kmer::<Dna, 17, u64>::unsafe_from_seqslice(&self.dna_seq[pos..pos + k]).bs, k)
+            }
+            19 => {
+                reverse_bit_pairs(Kmer::<Dna, 19, u64>::unsafe_from_seqslice(&self.dna_seq[pos..pos + k]).bs, k)
+            }
+            20 => {
+                reverse_bit_pairs(Kmer::<Dna, 20, u64>::unsafe_from_seqslice(&self.dna_seq[pos..pos + k]).bs, k)
+            }
+            21 => {
+                reverse_bit_pairs(Kmer::<Dna, 21, u64>::unsafe_from_seqslice(&self.dna_seq[pos..pos + k]).bs, k)
+            }
+            22 => {
+                reverse_bit_pairs(Kmer::<Dna, 22, u64>::unsafe_from_seqslice(&self.dna_seq[pos..pos + k]).bs, k)
+            }
+            23 => {
+                reverse_bit_pairs(Kmer::<Dna, 23, u64>::unsafe_from_seqslice(&self.dna_seq[pos..pos + k]).bs, k)
+            }
+            _ => {
+                panic!("Invalid kmer size")
+            }
+        };
+
+        // get canonical k-mer based on sides
+        let reverse_kmer = reverse_bit_pairs(kmer ^ (u64::MAX), k);
+        if canonical{
+            Kmer48::from_u64(kmer)
+        }
+        else{
+            Kmer48::from_u64(reverse_kmer)
+        }
+    }
+
+    #[inline]
     pub fn kmer_from_position(&self, pos:u32, k: usize) -> Kmer48{
         let pos = pos as usize;
 
@@ -555,12 +661,13 @@ impl TwinRead{
         self.snpmer_positions.shrink_to_fit();
     }
 
-    pub fn minimizer_kmers(&self) -> Vec<Kmer48> {
-        self.minimizer_positions.iter().map(|&x| self.kmer_from_position(x, self.k as usize)).collect()
+    pub fn minimizer_kmers(&self) -> &Vec<Kmer48> {
+        &self.minimizer_kmers
     }
 
-    pub fn snpmer_kmers(&self) -> Vec<Kmer48> {
-        self.snpmer_positions.iter().map(|&x| self.kmer_from_position(x, self.k as usize)).collect()
+    pub fn snpmer_kmers(&self) -> &Vec<Kmer48> {
+        //self.snpmer_positions.iter().map(|&x| self.kmer_from_position(x, self.k as usize)).collect()
+        &self.snpmer_kmers
     }
 
     // pub fn minimizers(&self) -> impl Iterator<Item = (u32, Kmer48)>+ '_ {
@@ -597,6 +704,13 @@ impl TwinRead{
         retain_vec_indices(&mut self.snpmer_positions, &positions);
         //self.snpmer_kmers.shrink_to_fit();
         self.snpmer_positions.shrink_to_fit();
+    }
+
+    pub fn blockmers_vec(&self) -> Vec<(u32, u64)> {
+        self.blockmer_positions.iter().zip(self.blockmer_canonical.iter()).map(|(&pos, &is_canonical)| {
+            let kmer = self.kmer_from_position_canonical(pos, self.k as usize + self.l as usize, is_canonical);
+            (pos, kmer.to_u64())
+        }).collect()
     }
 
     
@@ -667,6 +781,26 @@ pub struct SnpmerInfo {
     pub mid_bases: SmallVec<[u8;2]>,
     pub counts: SmallVec<[u32;2]>,
     pub k: u8,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default, Eq, Ord, PartialOrd, Hash)]
+pub struct BlockmerInfo {
+    /// The anchor k-mer (first k bases, without suffix)
+    pub anchor_kmer: u64,
+    /// The two most abundant blockmers (biallelic, with full sequence)
+    pub blockmers: SmallVec<[Blockmer; 2]>,
+    /// Counts for each blockmer
+    pub counts: SmallVec<[u32; 2]>,
+    /// Anchor k-mer length
+    pub k: u8,
+    /// Suffix length
+    pub l: u8,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct BlockmerGlobalInfo {
+    pub blockmer_info: Vec<BlockmerInfo>,
+    pub read_files: Vec<PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]

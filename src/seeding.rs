@@ -1,6 +1,4 @@
 use crate::constants::DEDUP_SNPMERS;
-use crate::constants::MID_BASE_THRESHOLD_READ;
-use crate::constants::MID_BASE_THRESHOLD_INITIAL;
 use crate::constants::QUALITY_SEQ_BIN;
 use crate::types::*;
 use fxhash::FxHashMap;
@@ -321,12 +319,18 @@ pub fn get_twin_read_syncmer(
     qualities: Option<Vec<u8>>,
     k: usize,
     c: usize,
+    l: usize,
     snpmer_set: &FxHashSet<Kmer64>,
+    blockmer_set: &FxHashSet<Kmer64>,
     id: String,
+    minimum_bq: u8,
 ) -> Option<TwinRead> {
     let mut snpmer_positions = vec![];
     let mut minimizer_positions = vec![];
+    let mut minimizer_kmers = vec![];
     let mut snpmer_kmers = vec![];
+    let mut blockmer_positions = vec![];
+    let mut blockmer_canon = vec![];
     //let mut minimizer_kmers = vec![];
     let mut dedup_snpmers = FxHashMap::default();
     let marker_k = k;
@@ -339,12 +343,21 @@ pub fn get_twin_read_syncmer(
     let mut rolling_kmer_f_marker: MarkerBits = 0;
     let mut rolling_kmer_r_marker: MarkerBits = 0;
 
+    // Blockmer rolling k-mers (k+l length)
+    let blockmer_k = k + l;
+    let mut rolling_kmer_f_blockmer: MarkerBits = 0;
+    let mut rolling_kmer_r_blockmer: MarkerBits = 0;
+
     let marker_reverse_shift_dist = 2 * (marker_k - 1);
+    let blockmer_reverse_shift_dist = 2 * (blockmer_k - 1);
     let split_mask = !(3 << (k-1));
     let marker_mask = MarkerBits::MAX >> (std::mem::size_of::<MarkerBits>() * 8 - 2 * marker_k);
     let marker_rev_mask = !(3 << (2 * marker_k - 2));
+    let blockmer_mask = MarkerBits::MAX >> (std::mem::size_of::<MarkerBits>() * 8 - 2 * blockmer_k);
+    let blockmer_rev_mask = !(3 << (2 * blockmer_k - 2));
     let len = string.len();
     let mid_k = k / 2;
+    let mut debug_blockmers = vec![];
 
     // New syncmer-related variables
     let s = k - c + 1;  // length of syncmers
@@ -382,6 +395,19 @@ pub fn get_twin_read_syncmer(
             rolling_s_mer_r >>= 2;
             rolling_s_mer_r |= nuc_r << s_reverse_shift_dist;
         }
+    }
+
+    // Initialize first blockmer_k-1 bases for blockmer k-mer
+    for i in 0..blockmer_k - 1 {
+        if i >= len {
+            break;
+        }
+        let nuc_f = BYTE_TO_SEQ[string[i] as usize] as u64;
+        let nuc_r = 3 - nuc_f;
+        rolling_kmer_f_blockmer <<= 2;
+        rolling_kmer_f_blockmer |= nuc_f;
+        rolling_kmer_r_blockmer >>= 2;
+        rolling_kmer_r_blockmer |= nuc_r << blockmer_reverse_shift_dist;
     }
 
     for i in marker_k-1..len {
@@ -431,6 +457,54 @@ pub fn get_twin_read_syncmer(
             s_mer_hashes.pop_front();
         }
         
+        // Update blockmer k-mers (k+l length) if we have enough bases
+        if i >= blockmer_k - 1 {
+            rolling_kmer_f_blockmer <<= 2;
+            rolling_kmer_f_blockmer |= nuc_f;
+            rolling_kmer_f_blockmer &= blockmer_mask;
+            rolling_kmer_r_blockmer >>= 2;
+            rolling_kmer_r_blockmer &= blockmer_rev_mask;
+            rolling_kmer_r_blockmer |= nuc_r << blockmer_reverse_shift_dist;
+
+            // Check if blockmer is in the set
+            if blockmer_set.contains(&rolling_kmer_f_blockmer) || blockmer_set.contains(&rolling_kmer_r_blockmer) {
+                // Check quality of the l suffix bases
+                let mut all_suffix_bases_good = true;
+                if let Some(qualities) = qualities.as_ref() {
+                    if !read_with_all_equal_qualities {
+                        // The suffix is the last l bases of the blockmer
+                        let blockmer_start = i + 1 - blockmer_k;
+                        for j in 0..l {
+                            let suffix_pos = blockmer_start + k + j;
+                            if suffix_pos < qualities.len() {
+                                let qval = qualities[suffix_pos] - 33;
+                                if qval <= minimum_bq {
+                                    all_suffix_bases_good = false;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if all_suffix_bases_good || read_with_all_equal_qualities {
+                    blockmer_positions.push((i + 1 - blockmer_k) as u32);
+                    if blockmer_set.contains(&rolling_kmer_f_blockmer) {
+                        if log::log_enabled!(log::Level::Trace) {
+                            debug_blockmers.push(decode_kmer64(rolling_kmer_f_blockmer, (k + l) as u8));
+                        }
+                        blockmer_canon.push(true);
+                    } else {
+                        if log::log_enabled!(log::Level::Trace) {
+                            debug_blockmers.push(decode_kmer64(rolling_kmer_r_blockmer, (k + l) as u8));
+                        }
+                        blockmer_canon.push(false);
+                    }
+                }
+            }
+        }
+
+
         // Check SNPmer
         if snpmer_set.contains(&canonical_kmer_marker) {
             let mid_base_qval = if let Some(qualities) = qualities.as_ref() {
@@ -439,8 +513,8 @@ pub fn get_twin_read_syncmer(
             } else {
                 60
             };
-            
-            if mid_base_qval > MID_BASE_THRESHOLD_READ || read_with_all_equal_qualities {
+
+            if mid_base_qval > minimum_bq|| read_with_all_equal_qualities {
                 //snpmers_in_read.push((i + 1 - k, canonical_kmer_marker));
                 snpmer_positions.push((i + 1 - k) as u32);
                 snpmer_kmers.push(canonical_kmer_marker);
@@ -448,7 +522,7 @@ pub fn get_twin_read_syncmer(
             if DEDUP_SNPMERS{
                 *dedup_snpmers.entry(canonical_kmer_marker & split_mask).or_insert(0) += 1;
             }
-        } 
+        }
         // Check for minimizer using syncmer method
        if i >= k - 1 && s_mer_hashes.len() == k - s + 1 {
             let middle_idx = (k - s) / 2;
@@ -464,22 +538,25 @@ pub fn get_twin_read_syncmer(
 
             if syncmer{
                 minimizer_positions.push((i + 1 - k) as u32);
+                minimizer_kmers.push(Kmer48::from(canonical_kmer_marker));
             }
         }
     }
 
-    //let mut no_dup_snpmers_kmers = vec![];
+    log::trace!("Read ID: {}, Blockmers found so far: {}, {:?}", id,  debug_blockmers.len(), debug_blockmers);
+
+    let mut no_dup_snpmers_kmers = vec![];
     let mut no_dup_snpmers_positions = vec![];
     if DEDUP_SNPMERS{
         for i in 0..snpmer_kmers.len(){
             if dedup_snpmers[&(snpmer_kmers[i] & split_mask)] == 1 {
-                //no_dup_snpmers_kmers.push(Kmer48::from_u64(snpmer_kmers[i]));
+                no_dup_snpmers_kmers.push(Kmer48::from_u64(snpmer_kmers[i]));
                 no_dup_snpmers_positions.push(snpmer_positions[i]);
             }
         }
     }
 
-    //let snpmer_kmers = no_dup_snpmers_kmers;
+    let snpmer_kmers = no_dup_snpmers_kmers;
     let snpmer_positions_final;
     if DEDUP_SNPMERS{
         snpmer_positions_final = no_dup_snpmers_positions;
@@ -549,13 +626,18 @@ pub fn get_twin_read_syncmer(
     Some(TwinRead{
         //snpmer_kmers,
         snpmer_positions: snpmer_positions_final,
+        snpmer_kmers,
         //minimizer_kmers,
         minimizer_positions,
+        minimizer_kmers,
+        blockmer_positions,
+        blockmer_canonical: blockmer_canon,
         //base_id: id.clone().split_ascii_whitespace().next().unwrap().to_string(),
         base_id: first_word(&id),
         //id: first_word(&id),
         id: id,
         k: k as u8,
+        l: l as u8,
         base_length: len,
         dna_seq,
         qual_seq: qual_seq,
@@ -747,10 +829,149 @@ pub fn estimate_sequence_identity(qualities: Option<&[u8]>) -> Option<f64> {
     Some(100. - (sum / count as f64 * 100.))
 }
 
+/// Extract blockmers from a sequence
+/// Blockmers have structure: [anchor k-mer (k bases)][suffix (l bases)]
+/// Returns: Vec of Blockmer structs containing the sequence and orientation
+pub fn blockmer_kmers(
+    string: Vec<u8>,
+    qualities: Option<Vec<u8>>,
+    k: usize,
+    l: usize,
+    minimum_bq: u8,
+) -> Vec<Blockmer> {
+    type MarkerBits = u64;
+    let full_length = k + l;
+
+    if string.len() < full_length {
+        return vec![];
+    }
+
+    if k > 31 || full_length > 31 {
+        panic!("k and k+l must be <= 31");
+    }
+
+    let mut blockmers = Vec::with_capacity(string.len() - full_length + 1);
+
+    // Rolling k-mers for the anchor part (length k)
+    let mut rolling_kmer_f: MarkerBits = 0;
+    let mut rolling_kmer_r: MarkerBits = 0;
+
+    let k_mask = MarkerBits::MAX >> (std::mem::size_of::<MarkerBits>() * 8 - 2 * k);
+    let k_reverse_shift_dist = 2 * (k - 1);
+
+
+    // Initialize rolling k-mer for anchor
+    for i in 0..k-1 {
+        let nuc_f = BYTE_TO_SEQ[string[i] as usize] as u64;
+        let nuc_r = 3 - nuc_f;
+        rolling_kmer_f <<= 2;
+        rolling_kmer_f |= nuc_f;
+        rolling_kmer_r >>= 2;
+        rolling_kmer_r |= nuc_r << k_reverse_shift_dist;
+    }
+
+    // Scan through sequence
+    for i in k-1..string.len() {
+        // Update rolling k-mer
+        let nuc_byte = string[i] as usize;
+        let nuc_f = BYTE_TO_SEQ[nuc_byte] as u64;
+        let nuc_r = 3 - nuc_f;
+        rolling_kmer_f <<= 2;
+        rolling_kmer_f |= nuc_f;
+        rolling_kmer_f &= k_mask;
+        rolling_kmer_r >>= 2;
+        rolling_kmer_r |= nuc_r << k_reverse_shift_dist;
+
+        // Skip palindromic anchors
+        if rolling_kmer_f == rolling_kmer_r {
+            continue;
+        }
+
+        // Determine canonical orientation based on anchor k-mer
+        let is_forward_canonical = rolling_kmer_f < rolling_kmer_r;
+
+        if is_forward_canonical {
+            // Forward: suffix is to the RIGHT
+            // Check if we have enough bases to the right
+            if i + l >= string.len() {
+                continue;
+            }
+
+            // Extract forward suffix (l bases to the right)
+            // Read from left to right: most recent base in lowest bits
+            let mut suffix: MarkerBits = 0;
+            let mut low_qual = false;
+            for j in 1..=l {
+                let pos = i + j;
+                let nuc = BYTE_TO_SEQ[string[pos] as usize] as u64;
+                suffix <<= 2;
+                suffix |= nuc;
+                if let Some(quals) = qualities.as_ref() {
+                    let q = quals[pos];
+                    if q - 33 < minimum_bq {
+                        // Low quality base in suffix, skip this blockmer
+                        low_qual = true;
+                        break;
+                    }
+                }
+            }
+
+            if low_qual {
+                continue;
+            }
+
+            // Construct full blockmer: [anchor][suffix]
+            let full_blockmer = (rolling_kmer_f << (2 * l)) | suffix;
+
+            // Create Blockmer struct with forward orientation
+            blockmers.push(Blockmer::new(full_blockmer, true));
+        } else {
+            // Reverse: we're on RC strand, look to the LEFT
+            let k_start = i - k + 1;
+            if k_start < l {
+                continue;
+            }
+
+            // Extract left suffix (l bases to the left) and reverse complement
+            // Example: if we see [GCA][CTGT] where CTGT->ACAG is canonical
+            // GCA is at positions k_start-3, k_start-2, k_start-1
+            // We need to read them, RC them to get TGC
+            let mut low_qual = false;
+            let mut suffix: MarkerBits = 0;
+            for j in 1..=l {
+                let pos = k_start - j;
+                let nuc = BYTE_TO_SEQ[string[pos] as usize] as u64;
+                let nuc_rc = 3 - nuc;
+                suffix <<= 2;
+                suffix |= nuc_rc;
+                if let Some(quals) = qualities.as_ref() {
+                    let q = quals[pos];
+                    if q - 33 < minimum_bq {
+                        // Low quality base in suffix, skip this blockmer
+                        low_qual = true;
+                        break;
+                    }
+                }
+            }
+
+            if !low_qual {
+                // Proceed only if no low-quality bases in suffix
+                let full_blockmer = (rolling_kmer_r << (2 * l)) | suffix;
+                blockmers.push(Blockmer::new(full_blockmer, false));
+            } else {
+                continue;
+            }
+        }
+    }
+
+    blockmers
+}
+
 pub fn split_kmer_mid(
     string: Vec<u8>,
     qualities: Option<Vec<u8>>,
-    k: usize
+    k: usize,
+    minimum_bq: u8,
 ) -> Vec<u64>{
     type MarkerBits = u64;
     if string.len() < k {
@@ -782,7 +1003,7 @@ pub fn split_kmer_mid(
         if !q_iter.all(|q| q == first_q){
             for i in marker_k-1..qualities.len(){
                 let mid_pos = i + 1 + mid_k - k;
-                if qualities[mid_pos] - 33 < MID_BASE_THRESHOLD_INITIAL{
+                if qualities[mid_pos] - 33 < minimum_bq{
                     positions_to_skip.insert(i);
                 }
             }

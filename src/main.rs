@@ -1,4 +1,3 @@
-use bincode;
 use flexi_logger::style;
 use clap::Parser;
 use flexi_logger::{DeferredNow, Duplicate, FileSpec, Record};
@@ -17,12 +16,11 @@ use savont::utils::*;
 use savont::chimera;
 use savont::taxonomy;
 use savont::download;
-use std::fs::File;
-use std::io::BufReader;
 use std::path::Path;
 use std::path::PathBuf;
 use std::time::Instant;
 use sysinfo::System;
+use fxhash::FxHashSet;
 fn main() {
     let args = cli::Cli::parse();
 
@@ -50,12 +48,14 @@ fn run_cluster(args: &cli::ClusterArgs, cli_args: &cli::Cli) {
     log::info!("Starting clustering...");
 
     // Step 1: Process k-mers, count k-mers, and get SNPmers
-    let mut kmer_info = get_kmers_and_snpmers(&args, &temp_dir);
+    let (mut kmer_info, mut blockmer_info) = get_kmers_and_snpmers(&args, &temp_dir);
     log_memory_usage(true, "STAGE 1: Obtained SNPmers");
+    log::info!("Using blockmers: {}", args.use_blockmers);
 
     // Step 1.5: Get twin reads from SNPmers
     let twin_reads = get_twin_reads_from_kmer_info(
         &mut kmer_info,
+        &mut blockmer_info,
         &args,
         &temp_dir,
         &temp_dir.join("binary_temp"),
@@ -79,9 +79,9 @@ fn run_cluster(args: &cli::ClusterArgs, cli_args: &cli::Cli) {
     // Estimate quality error rates from top 10% of clusters
     let quality_error_map = alignment::estimate_quality_error_rates(&pileups, &consensuses, 0.1);
 
-    // Polish consensus sequences using Bayesian inference
-    let mut low_qual_consensus = alignment::polish_consensuses(&mut pileups, &mut consensuses, &quality_error_map, &twin_reads, &args, &temp_dir);
-    log_memory_usage(true, "STAGE 2: Polished consensus sequences");
+    // Analyze pileup consensuses 
+    let mut low_qual_consensus = alignment::analyze_pileup_consensuses(&mut pileups, &mut consensuses, &quality_error_map, &twin_reads, &args, &temp_dir);
+    log_memory_usage(true, "STAGE 2: Analyzed pileup consensus sequences");
 
     // Decompress HPC sequences before merging and chimera detection
     log::info!("Decompressing {} HPC consensus sequences for merging and chimera detection", consensuses.len());
@@ -100,7 +100,7 @@ fn run_cluster(args: &cli::ClusterArgs, cli_args: &cli::Cli) {
 
     // Merge similar consensus sequences based on alignment and depth (using decompressed sequences)
     // This also merges low quality consensuses into high quality ones
-    let consensuses = alignment::merge_similar_consensuses(&twin_reads, consensuses, low_qual_consensus, &args, &temp_dir);
+    let mut consensuses = alignment::merge_similar_consensuses(&twin_reads, consensuses, low_qual_consensus, &args, &temp_dir);
     log_memory_usage(true, "STAGE 3: Merged similar consensus sequences");
 
     // Detect and filter chimeric consensus sequences
@@ -108,20 +108,21 @@ fn run_cluster(args: &cli::ClusterArgs, cli_args: &cli::Cli) {
         log::info!("Skipping chimera detection as per user request.");
         return;
     }
-    let chimeras = chimera::detect_chimeras(&consensuses, &args);
+    let chimeras = chimera::detect_chimeras(&mut consensuses, &args);
     let mut consensuses = chimera::filter_chimeras(consensuses, &chimeras);
     log_memory_usage(true, "STAGE 4: Filtered chimeric consensus sequences");
 
     log::info!("Final consensus count after chimera filtering: {}", consensuses.len());
 
     // Check for within-ASV heterogeneity
-    if args.phase_heterogeneous {
-        log::info!("Checking for heterogeneous ASVs to phase...");
-        alignment::check_asv_heterogeneity(&twin_reads, &mut consensuses, &args);
-    }
+    // if args.phase_heterogeneous {
+    //     log::info!("Checking for heterogeneous ASVs to phase...");
+    //     alignment::check_asv_heterogeneity(&twin_reads, &mut consensuses, &args);
+    // }
 
     // Refine ASV depths using EM algorithm on read-level mappings
-    alignment::refine_asv_depths_with_em(&twin_reads, &mut consensuses, &args, &temp_dir);
+    alignment::refine_asv_depths_with_em(&twin_reads, &mut consensuses, &kmer_info, &args, &temp_dir);
+    consensuses.sort_by(|a, b| b.depth.partial_cmp(&a.depth).unwrap());
     log_memory_usage(true, "STAGE 5: Refined ASV depths with EM algorithm");
 
     log::info!("Final consensus count after EM refinement: {}", consensuses.len());
@@ -339,13 +340,14 @@ fn initialize_setup_cluster(args: &cli::ClusterArgs, cli_args: &cli::Cli) -> Pat
     return output_dir.to_path_buf();
 }
 
-fn get_kmers_and_snpmers(args: &cli::ClusterArgs, output_dir: &PathBuf) -> types::KmerGlobalInfo {
+fn get_kmers_and_snpmers(args: &cli::ClusterArgs, output_dir: &PathBuf) -> (types::KmerGlobalInfo, types::BlockmerGlobalInfo) {
     let saved_input = args.input_files == [MAGIC_EXIST_STRING];
 
     let binary_temp_dir = output_dir.join("binary_temp");
     let snpmer_info_path = binary_temp_dir.join("snpmer_info.bin");
 
     let kmer_info;
+    let blockmer_info;
     if saved_input {
         if !snpmer_info_path.exists() {
             log::error!("No input files provided. See --help for usage.");
@@ -353,39 +355,44 @@ fn get_kmers_and_snpmers(args: &cli::ClusterArgs, output_dir: &PathBuf) -> types
         }
     }
 
-    if saved_input && snpmer_info_path.exists() {
-        kmer_info = bincode::deserialize_from(BufReader::new(
-            File::open(snpmer_info_path).unwrap(),
-        ))
-        .unwrap();
-        log::info!("Loaded snpmer info from file.");
-    } else {
-        let start = Instant::now();
-        let big_kmer_map = seq_parse::read_to_split_kmers(args.kmer_size, args.threads, &args);
-        log::info!(
-            "Time elapsed in for counting k-mers is: {:?}",
-            start.elapsed()
-        );
+    let start = Instant::now();
+    let (big_snpmer_map, big_blockmer_map) = seq_parse::read_to_split_kmers(args.kmer_size, args.blockmer_length, args.threads, &args);
+    log::info!(
+        "Time elapsed in for counting k-mers is: {:?}",
+        start.elapsed()
+    );
 
-        let start = Instant::now();
-        //kmer_info = kmer_comp::get_snpmers(big_kmer_map, args.kmer_size, &args);
-        kmer_info = kmer_comp::get_snpmers_inplace_sort(big_kmer_map, args.kmer_size, &args);
+    let start = Instant::now();
+    if args.use_blockmers {
+        blockmer_info = kmer_comp::get_blockmers_inplace_sort(big_blockmer_map, &big_snpmer_map, args.kmer_size, args.blockmer_length, &args);
         log::info!(
-            "Time elapsed in for parsing snpmers is: {:?}",
+            "Time elapsed in for parsing blockmers is: {:?}",
             start.elapsed()
         );
     }
-    return kmer_info;
+    else{
+        blockmer_info = types::BlockmerGlobalInfo::default();
+    }
+
+    //kmer_info = kmer_comp::get_snpmers(big_snpmer_map, args.kmer_size, &args);
+    kmer_info = kmer_comp::get_snpmers_inplace_sort(big_snpmer_map, args.kmer_size, &args);
+    log::info!(
+        "Time elapsed in for parsing snpmers is: {:?}",
+        start.elapsed()
+    );
+
+    return (kmer_info, blockmer_info);
 }
 
 fn get_twin_reads_from_kmer_info(
     kmer_info: &mut types::KmerGlobalInfo,
+    blockmer_info: &mut types::BlockmerGlobalInfo,
     args: &cli::ClusterArgs,
     _output_dir: &PathBuf,
     _cleaning_temp_dir: &PathBuf,
 ) -> Vec<types::TwinRead>{
     log::info!("Getting reads...");
-    let mut twin_reads_raw = kmer_comp::twin_reads_from_snpmers(kmer_info, &args);
+    let mut twin_reads_raw = kmer_comp::twin_reads_from_snpmers(kmer_info, blockmer_info, &args);
     twin_reads_raw.sort_by(|a,b| b.est_id.unwrap_or(100.0).partial_cmp(&a.est_id.unwrap_or(100.0)).unwrap());
     return twin_reads_raw;
 }
@@ -404,7 +411,7 @@ fn debug_consensus_twin_read(kmer_info: &types::KmerGlobalInfo, consensuses: &[C
 
     for (i,consensus) in consensuses.iter().enumerate() {
         log::trace!("Consensus ID: {}, Index {}, Depth: {}, Length: {}", consensus.id, i, consensus.depth, consensus.decompressed_sequence.as_ref().unwrap().len());
-        let tr_rep = seeding::get_twin_read_syncmer(consensus.decompressed_sequence.as_ref().unwrap().clone(), None, args.kmer_size, args.c, &snpmer_set, String::new()).unwrap();
+        let tr_rep = seeding::get_twin_read_syncmer(consensus.decompressed_sequence.as_ref().unwrap().clone(), None, args.kmer_size, args.c, args.blockmer_length, &snpmer_set, &FxHashSet::default(), String::new(), args.minimum_base_quality).unwrap();
         let snpmers = tr_rep.snpmers_vec().into_iter().map(|(pos, kmer48)| (pos, decode_kmer48(kmer48, args.kmer_size as u8))).collect::<Vec<_>>();
         log::trace!("SNPmer bases are: {:?}", snpmers);
     }

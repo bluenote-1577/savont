@@ -67,7 +67,7 @@ pub fn reverse_complement(seq: &[u8]) -> Vec<u8> {
 /// Homopolymer compress a sequence
 /// Returns (hpc_sequence, hp_lengths) where hp_lengths[i] is the run length of hpc_sequence[i]
 /// Example: b"AAACGT" -> (b"ACGT", vec![3, 1, 1, 1])
-pub fn homopolymer_compress(seq: &[u8]) -> (Vec<u8>, Vec<u8>) {
+pub fn homopolymer_compress(seq: &[u8], do_hpc: bool) -> (Vec<u8>, Vec<u8>) {
     if seq.is_empty() {
         return (Vec::new(), Vec::new());
     }
@@ -77,20 +77,25 @@ pub fn homopolymer_compress(seq: &[u8]) -> (Vec<u8>, Vec<u8>) {
 
     let mut current_base = seq[0];
     let mut current_length = 1u8;
+    if do_hpc{
+        for i in 1..seq.len() {
+            if seq[i] == current_base && current_length < 255 {
+                // Continue the homopolymer run (cap at 255)
+                current_length += 1;
+            } else {
+                // End of run, save it
+                hpc_seq.push(current_base);
+                hp_lengths.push(current_length);
 
-    for i in 1..seq.len() {
-        if seq[i] == current_base && current_length < 255 {
-            // Continue the homopolymer run (cap at 255)
-            current_length += 1;
-        } else {
-            // End of run, save it
-            hpc_seq.push(current_base);
-            hp_lengths.push(current_length);
-
-            // Start new run
-            current_base = seq[i];
-            current_length = 1;
+                // Start new run
+                current_base = seq[i];
+                current_length = 1;
+            }
         }
+    }
+    else{
+        hpc_seq.extend_from_slice(seq);
+        hp_lengths.extend(vec![1u8; seq.len()]);
     }
 
     // Don't forget the last run
@@ -128,7 +133,7 @@ pub fn homopolymer_decompress(hpc_seq: &[u8], hp_lengths: &[u8]) -> Vec<u8> {
 /// Returns (hpc_sequence, hpc_qualities, hp_lengths)
 /// Quality strategy: use minimum quality from each homopolymer run (most conservative)
 /// Example: (b"AAACGT", [30,35,40,25,30,35]) -> (b"ACGT", [30,25,30,35], [3,1,1,1])
-pub fn homopolymer_compress_with_quality(seq: &[u8], qualities: &[u8]) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
+pub fn homopolymer_compress_with_quality(seq: &[u8], qualities: &[u8], do_hpc: bool) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
     if seq.is_empty() || seq.len() != qualities.len() {
         return (Vec::new(), Vec::new(), Vec::new());
     }
@@ -141,28 +146,35 @@ pub fn homopolymer_compress_with_quality(seq: &[u8], qualities: &[u8]) -> (Vec<u
     let mut current_length = 1u8;
     let mut current_min_quality = qualities[0];
 
-    for i in 1..seq.len() {
-        if seq[i] == current_base && current_length < 255 {
-            // Continue the homopolymer run
-            current_length += 1;
-            current_min_quality = current_min_quality.min(qualities[i]);
-        } else {
-            // End of run, save it
-            hpc_seq.push(current_base);
-            hpc_qualities.push(current_min_quality);
-            hp_lengths.push(current_length);
+    if do_hpc{
+        for i in 1..seq.len() {
+            if seq[i] == current_base && current_length < 255 {
+                // Continue the homopolymer run
+                current_length += 1;
+                current_min_quality = current_min_quality.min(qualities[i]);
+            } else {
+                // End of run, save it
+                hpc_seq.push(current_base);
+                hpc_qualities.push(current_min_quality);
+                hp_lengths.push(current_length);
 
-            // Start new run
-            current_base = seq[i];
-            current_length = 1;
-            current_min_quality = qualities[i];
+                // Start new run
+                current_base = seq[i];
+                current_length = 1;
+                current_min_quality = qualities[i];
+            }
         }
-    }
 
-    // Don't forget the last run
-    hpc_seq.push(current_base);
-    hpc_qualities.push(current_min_quality);
-    hp_lengths.push(current_length);
+        // Don't forget the last run
+        hpc_seq.push(current_base);
+        hpc_qualities.push(current_min_quality);
+        hp_lengths.push(current_length);
+    }
+    else{
+        hpc_seq.extend_from_slice(seq);
+        hpc_qualities.extend_from_slice(qualities);
+        hp_lengths.extend(vec![1u8; seq.len()]);
+    }
 
     hpc_seq.shrink_to_fit();
     hpc_qualities.shrink_to_fit();

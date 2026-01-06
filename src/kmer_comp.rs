@@ -34,7 +34,38 @@ pub fn homopolymer_compression(seq: Vec<u8>) -> Vec<u8> {
 }
 
 
-pub fn twin_reads_from_snpmers(kmer_info: &mut KmerGlobalInfo, args: &Cli) -> Vec<TwinRead>{
+/// Load sequences from a FASTA file and convert to TwinReads with SNPmers and minimizers
+/// Uses kmer_info to build the SNPmer set for filtering (same as twin_reads_from_snpmers)
+pub fn twin_reads_from_fasta(fasta_path: &Path, kmer_info: &KmerGlobalInfo, k: usize, c: usize, l: usize, minimum_bq: u8) -> Vec<TwinRead> {
+    // Build SNPmer set from kmer_info (same as twin_reads_from_snpmers)
+    let mut snpmer_set = HashSet::default();
+    for snpmer_i in kmer_info.snpmer_info.iter(){
+        let k = snpmer_i.k as usize;
+        let snpmer1 = snpmer_i.split_kmer as u64 | ((snpmer_i.mid_bases[0] as u64) << (k-1) );
+        let snpmer2 = snpmer_i.split_kmer as u64 | ((snpmer_i.mid_bases[1] as u64) << (k-1) );
+        snpmer_set.insert(snpmer1);
+        snpmer_set.insert(snpmer2);
+    }
+
+    let mut twin_reads = Vec::new();
+    let mut reader = needletail::parse_fastx_file(fasta_path).expect("valid FASTA path");
+
+    while let Some(record) = reader.next() {
+        let rec = record.expect("Error reading record");
+        let seq = rec.seq().to_vec();
+        let id = String::from_utf8_lossy(rec.id()).to_string();
+
+        // Get TwinRead with SNPmer filtering (empty blockmer set for now)
+        if let Some(twin_read) = seeding::get_twin_read_syncmer(seq, None, k, c, l, &snpmer_set, &HashSet::default(), id, minimum_bq) {
+            twin_reads.push(twin_read);
+        }
+    }
+
+    log::debug!("Loaded {} sequences from FASTA as TwinReads", twin_reads.len());
+    twin_reads
+}
+
+pub fn twin_reads_from_snpmers(kmer_info: &mut KmerGlobalInfo, blockmer_info: &mut BlockmerGlobalInfo, args: &Cli) -> Vec<TwinRead>{
 
     let fastq_files = &kmer_info.read_files;
     let mut snpmer_set = HashSet::default();
@@ -45,11 +76,19 @@ pub fn twin_reads_from_snpmers(kmer_info: &mut KmerGlobalInfo, args: &Cli) -> Ve
         snpmer_set.insert(snpmer1);
         snpmer_set.insert(snpmer2);
     }
+    let mut blockmer_set = HashSet::default();
+    for blockmer_i in blockmer_info.blockmer_info.iter(){
+        for blockmer in blockmer_i.blockmers.iter(){
+            blockmer_set.insert(blockmer.kmer);
+        }
+    }
 
     let snpmer_set = Arc::new(snpmer_set);
+    let blockmer_set = Arc::new(blockmer_set);
     let twin_read_vec = Arc::new(Mutex::new(vec![]));
     let min_read_length = args.min_read_length;
     let max_read_length = args.max_read_length;
+    let minimum_bq = args.minimum_base_quality;
 
     let files_owned = fastq_files.clone();
     let solid_kmers_take = std::mem::take(&mut kmer_info.solid_kmers);
@@ -87,9 +126,11 @@ pub fn twin_reads_from_snpmers(kmer_info: &mut KmerGlobalInfo, args: &Cli) -> Ve
         let mut handles = Vec::new();
         let k = args.kmer_size;
         let c = args.c;
+        let l = args.blockmer_length;
         for _ in 0..args.threads{
             let rx = rx.clone();
             let set = Arc::clone(&snpmer_set);
+            let block_set = Arc::clone(&blockmer_set);
             let solid = Arc::clone(&arc_solid);
             let highfreq = Arc::clone(&arc_high_freq);
             let twrv = Arc::clone(&twin_read_vec);
@@ -102,7 +143,7 @@ pub fn twin_reads_from_snpmers(kmer_info: &mut KmerGlobalInfo, args: &Cli) -> Ve
                             let seqlen = seq.len();
                             let qualities = msg.1;
                             let id = msg.2;
-                            let twin_read = seeding::get_twin_read_syncmer(seq, qualities, k, c, set.as_ref(), id);
+                            let twin_read = seeding::get_twin_read_syncmer(seq, qualities, k, c, l, set.as_ref(), block_set.as_ref(), id, minimum_bq);
                             if twin_read.is_some(){
 
                                 let mut kmer_counter_map = FxHashMap::default();
@@ -116,12 +157,12 @@ pub fn twin_reads_from_snpmers(kmer_info: &mut KmerGlobalInfo, args: &Cli) -> Ve
                                         continue;
                                     }
                                     if USE_SOLID_KMERS {
-                                        if solid.contains(&mini){
+                                        if solid.contains(&Kmer48::from(*mini)){
                                             solid_mini_indices.insert(i);
                                         }
                                     }
                                     else{
-                                        if !highfreq.contains(&mini) {
+                                        if !highfreq.contains(&Kmer48::from(*mini)) {
                                             solid_mini_indices.insert(i);
                                         }
                                     }
@@ -192,6 +233,10 @@ pub fn twin_reads_from_snpmers(kmer_info: &mut KmerGlobalInfo, args: &Cli) -> Ve
     let mean_snpmer_density = snpmer_densities.iter().sum::<f64>() / snpmer_densities.len() as f64;
     log::info!("Mean SNPmer density: {:.2}%", mean_snpmer_density * 100.);
 
+    let blockmer_densities = twin_reads.iter().map(|x| x.blockmer_positions.len() as f64 / x.base_length as f64).collect::<Vec<_>>();
+    let mean_blockmer_density = blockmer_densities.iter().sum::<f64>() / blockmer_densities.len() as f64;
+    log::info!("Mean Blockmer density: {:.2}%", mean_blockmer_density * 100.);
+
     return twin_reads;
 }
 
@@ -207,6 +252,186 @@ pub fn split_kmer(kmer: u64, k: usize) -> (u64, u8){
     let mid_base = (kmer & split_mask_extract) >> (k-1);
     let masked_kmer = kmer & !split_mask_extract;
     return (masked_kmer, mid_base as u8);
+}
+
+pub fn get_blockmers_inplace_sort(mut big_blockmer_map: Vec<(u64, [u32;2])>, big_snpmer_map: &Vec<(u64, [u32;2])>, k: usize, l: usize, args: &Cli) -> BlockmerGlobalInfo {
+    log::debug!("Number of blockmers passing thresholds: {}", big_blockmer_map.len());
+
+    let snpmer_count_map = big_snpmer_map.iter()
+        .map(|pair| (pair.0, pair.1[0] + pair.1[1]))
+        .collect::<FxHashMap<_, _>>();
+
+    let single_strand = args.single_strand;
+    let paths_to_files = args.input_files.iter()
+        .map(|x| std::fs::canonicalize(Path::new(x).to_path_buf()).unwrap())
+        .collect::<Vec<_>>();
+
+    // Sort by anchor k-mer (first k bases)
+    log::info!("Finding blockmers...");
+    big_blockmer_map.par_sort_unstable_by_key(|(kmer, _)| {
+        // Extract anchor: shift right by 2*l to remove suffix bits
+        kmer >> (2 * l)
+    });
+
+    log::trace!("Finished parallel sort of blockmers");
+
+    let (mut tx, rx) = spmc::channel();
+    thread::spawn(move || {
+        let mut current_anchor = None;
+        let mut blockmer_pairs = vec![];
+
+        for pair in big_blockmer_map.into_iter() {
+            let counts = pair.1;
+
+            // Require >2 counts on each strand (is_forward=true and is_forward=false)
+            if !single_strand {
+                if counts[0] <= 2 || counts[1] <= 2 {
+                    continue;
+                }
+            } else {
+                if counts[0] <= 2 {
+                    continue;
+                }
+            }
+
+            let kmer = pair.0;
+            let anchor = kmer >> (2 * l); // Extract anchor k-mer
+
+            let anchor_count = snpmer_count_map.get(&anchor).unwrap_or(&0);
+            if *anchor_count > 10 * (counts[0] + counts[1]) {
+                continue;
+            }
+
+            if current_anchor != Some(anchor) {
+                if blockmer_pairs.len() > 1 {
+                    tx.send(blockmer_pairs).unwrap();
+                }
+                blockmer_pairs = vec![];
+                current_anchor = Some(anchor);
+            }
+            blockmer_pairs.push(pair);
+        }
+
+        if blockmer_pairs.len() > 1 {
+            tx.send(blockmer_pairs).unwrap();
+        }
+    });
+
+    utils::log_memory_usage(false, "Memory usage during blockmer detection");
+
+    let blockmers = Arc::new(Mutex::new(vec![]));
+    let mut handles = Vec::new();
+
+    for _ in 0..args.threads {
+        let rx = rx.clone();
+        let blockmers = Arc::clone(&blockmers);
+        handles.push(thread::spawn(move || {
+            loop {
+                match rx.recv() {
+                    Ok(msg) => {
+                        assert!(msg[0].0 != msg[1].0);
+
+                        // Sort by total count (descending) and keep top 2
+                        let mut pairsvec = msg;
+                        pairsvec.sort_unstable_by(|a, b| (b.1[0] + b.1[1]).cmp(&(a.1[0] + a.1[1])));
+
+                        // Only keep top 2 blockmers (biallelic)
+                        if pairsvec.len() < 2 {
+                            continue;
+                        }
+
+                        let n = pairsvec[0].1[0] + pairsvec[0].1[1];
+                        let succ = pairsvec[1].1[0] + pairsvec[1].1[1];
+
+                        // Binomial test to check if second allele is frequent enough
+                        let right_p_val_thresh1 = utils::binomial_test(n as u64, succ as u64, 0.025);
+                        let right_p_val_thresh2 = utils::binomial_test(n as u64, succ as u64, 0.050);
+                        let cond1 = right_p_val_thresh1 > 0.05;
+                        let cond2 = right_p_val_thresh2 > 0.05 && l < 5;
+
+                        if cond1 || cond2 {
+                            continue;
+                        }
+
+                        // Fisher's exact test for strand bias
+                        let a = pairsvec[0].1[0]; // blockmer1 forward
+                        let b = pairsvec[1].1[0]; // blockmer2 forward
+                        let c = pairsvec[0].1[1]; // blockmer1 reverse
+                        let d = pairsvec[1].1[1]; // blockmer2 reverse
+
+                        let contingency_table = [
+                            a.max(c), b.max(d),
+                            c.min(a), d.min(b)
+                        ];
+
+                        let p_value = fishers_exact(&contingency_table).unwrap().two_tail_pvalue;
+                        let odds = if contingency_table[0] == 0 || contingency_table[1] == 0 ||
+                                      contingency_table[2] == 0 || contingency_table[3] == 0 {
+                            0.0
+                        } else {
+                            (contingency_table[0] as f64 * contingency_table[3] as f64) /
+                            (contingency_table[1] as f64 * contingency_table[2] as f64)
+                        };
+
+                        if !single_strand && odds == 0.0 {
+                            continue;
+                        }
+
+                        let anchor = pairsvec[0].0 >> (2 * l);
+                        // Create Blockmer structs from u64 k-mers (use is_forward=true as default)
+                        let blockmer1 = Blockmer::new(pairsvec[0].0, true);
+                        let blockmer2 = Blockmer::new(pairsvec[1].0, true);
+
+                        let blockmer_info = BlockmerInfo {
+                            anchor_kmer: anchor,
+                            blockmers: smallvec![blockmer1, blockmer2],
+                            counts: smallvec![
+                                pairsvec[0].1[0] + pairsvec[0].1[1],
+                                pairsvec[1].1[0] + pairsvec[1].1[1]
+                            ],
+                            k: k as u8,
+                            l: l as u8,
+                        };
+
+                        // Is valid blockmer pair
+                        if p_value > 0.005 || (odds < 1.5 && odds > 1.0 / 1.5) {
+                            log::trace!("Found valid blockmer pair: {} vs {} with counts {:?} and p-value {:.5}, odds {:.2}",
+                            decode_kmer64(blockmer_info.blockmers[0].kmer, k as u8 + l as u8),
+                            decode_kmer64(blockmer_info.blockmers[1].kmer, k as u8 + l as u8),
+                            blockmer_info.counts,
+                            p_value,
+                            odds);
+
+                            blockmers.lock().unwrap().push(blockmer_info);
+                        }
+                        else{
+                            log::trace!("Rejected blockmer pair {} vs {} with counts {:?}, p-value {:.5}, odds {:.2}",
+                            decode_kmer64(blockmer_info.blockmers[0].kmer, k as u8 + l as u8),
+                            decode_kmer64(blockmer_info.blockmers[1].kmer, k as u8 + l as u8),
+                            blockmer_info.counts,
+                            p_value,
+                            odds);
+                        }
+                    }
+                    Err(_) => {
+                        break;
+                    }
+                }
+            }
+        }));
+    }
+
+    for handle in handles {
+        handle.join().unwrap();
+    }
+
+    let blockmers = Arc::try_unwrap(blockmers).unwrap().into_inner().unwrap();
+    log::info!("Number of blockmers found: {}", blockmers.len());
+
+    BlockmerGlobalInfo {
+        blockmer_info: blockmers,
+        read_files: paths_to_files,
+    }
 }
 
 pub fn get_snpmers_inplace_sort(mut big_kmer_map: Vec<(Kmer64, [u32;2])>, k: usize, args: &Cli) -> KmerGlobalInfo{
@@ -388,7 +613,7 @@ pub fn get_snpmers_inplace_sort(mut big_kmer_map: Vec<(Kmer64, [u32;2])>, k: usi
 
     let mut snpmers = Arc::try_unwrap(snpmers).unwrap().into_inner().unwrap();
     snpmers.sort();
-    log::debug!("Number of snpmers: {}. ", potential_snps.lock().unwrap());
+    log::info!("Number of snpmers: {}. ", potential_snps.lock().unwrap());
     return KmerGlobalInfo{
         snpmer_info: snpmers,
         solid_kmers: HashSet::default(),

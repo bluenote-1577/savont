@@ -518,8 +518,8 @@ pub fn join_circular_ends(seq: &mut Vec<u8>, overlap_len: usize, hang1: usize, h
     let overhang1 = seq[seq_len-overlap_length..seq_len].to_vec();
     let overhang2 = seq[0..overlap_length].to_vec();
 
-    let tr1 = seeding::get_twin_read_syncmer(overhang1, None, args.kmer_size, args.c, &FxHashSet::default(), String::new()).unwrap();
-    let tr2 = seeding::get_twin_read_syncmer(overhang2, None, args.kmer_size, args.c, &FxHashSet::default(), String::new()).unwrap();
+    let tr1 = seeding::get_twin_read_syncmer(overhang1, None, args.kmer_size, args.c, args.blockmer_length, &FxHashSet::default(), &FxHashSet::default(), String::new()).unwrap();
+    let tr2 = seeding::get_twin_read_syncmer(overhang2, None, args.kmer_size, args.c, args.blockmer_length, &FxHashSet::default(), &FxHashSet::default(), String::new()).unwrap();
 
     let mut lax_args = args.clone();
     lax_args.min_ol = args.min_ol/2;

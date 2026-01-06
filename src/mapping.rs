@@ -803,7 +803,7 @@ fn unitigs_to_tr(
             .map(|x| bits_to_ascii(x.to_bits()) as u8)
             .collect::<Vec<u8>>();
         let tr =
-            seeding::get_twin_read_syncmer(u8_seq, None, args.kmer_size, args.c, &snpmer_set, id);
+            seeding::get_twin_read_syncmer(u8_seq, None, args.kmer_size, args.c, args.blockmer_length, &snpmer_set, &FxHashSet::default(), id);
         if let Some(mut tr) = tr {
             let mut solid_mini_indices = FxHashSet::default();
             let mut solid_snpmer_indices = FxHashSet::default();

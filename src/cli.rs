@@ -53,7 +53,7 @@ pub struct ClusterArgs {
     pub clean_dir: bool,
 
     /// K-mer sampling rate: select 1 out of every C k-mers (higher = faster, less memory, slightly less sensitive)
-    #[arg(short, long, default_value = "11", help_heading = CLI_HEADINGS[1], hide = true)]
+    #[arg(short, long, default_value = "11", help_heading = CLI_HEADINGS[0], hide = true)]
     pub c: usize,
 
     /// Minimum read length for reads 
@@ -64,6 +64,14 @@ pub struct ClusterArgs {
     #[arg(long, default_value = "2000", help_heading = CLI_HEADINGS[0])]
     pub max_read_length: usize,
 
+    /// Minimum estimated read accuracy (%) to include in clustering
+    #[arg(long, default_value_t=98., help_heading = CLI_HEADINGS[0])]
+    pub quality_value_cutoff: f64,
+
+    /// Minimum base quality to be considered high-quality for SNPmer detection. Set lower for older reads (~18 for R9). 
+    #[arg(long, default_value_t=25, help_heading = CLI_HEADINGS[0])]
+    pub minimum_base_quality: u8,
+
     /// Use only forward strand k-mers (for strand-specific protocols)
     #[arg(short, long, help_heading = CLI_HEADINGS[1])]
     pub single_strand: bool,
@@ -72,34 +80,39 @@ pub struct ClusterArgs {
     #[arg(long, default_value_t=12, help_heading = CLI_HEADINGS[1])]
     pub min_cluster_size: usize,
 
-    /// Minimum estimated read accuracy (%) to include in clustering
-    #[arg(long, default_value_t=98., help_heading = CLI_HEADINGS[1])]
-    pub quality_value_cutoff: f64,
-
+    
     /// Bloom filter size in GB for k-mer filtering (0 = auto, increase for very large datasets)
-    #[arg(short, long, default_value_t=0., help_heading = CLI_HEADINGS[1])]
+    #[arg(short, long, default_value_t=0., help_heading = CLI_HEADINGS[1], hide=true)]
     pub bloom_filter_size: f64,
 
-    /// Minimum depth required for sequences with Ns to be included in output
-    #[arg(short, long, default_value_t=250, help_heading = CLI_HEADINGS[1])]
+    /// Minimum depth required for sequences with ambiguous bases to be included in output
+    #[arg(short, long, default_value_t=250, help_heading = CLI_HEADINGS[2])]
     pub n_depth_cutoff: usize,
 
-    /// Negative posterior probability threshold (natural log scale) for SNP calling. Higher = more stringent for low-quality consensuses.
-    #[arg(short, long, default_value_t=30.0, help_heading = CLI_HEADINGS[1])]
+    /// Use homopolymer-compressed sequences for clustering and consensus generation
+    #[arg(short, long, default_value_t=true, help_heading = CLI_HEADINGS[2], hide=true)]
+    pub use_hpc: bool,
+
+
+    /// Mask low-quality bases in consensus sequences (set to 'N' if below posterior probability threshold)
+    #[arg(long, help_heading = CLI_HEADINGS[2])]
+    pub mask_low_quality: bool,
+
+    /// Negative alternate posterior probability threshold (natural log scale) for base consensus. Higher = more stringent for low-quality consensuses. Do not set higher than min_depth * ln(error_rate). 
+    #[arg(short, long, default_value_t=30., help_heading = CLI_HEADINGS[2])]
     pub posterior_threshold_ln: f64,
 
-
+    
     /// Maximum number of reclustering iterations
     #[arg(long, default_value_t=10, help_heading = CLI_HEADINGS[1])]
     pub max_iterations_recluster: usize,
-
 
     /// Use more aggressive k-mer filtering (faster but may be non-deterministic)
     #[arg(long, help_heading = CLI_HEADINGS[1], hide = true)]
     pub aggressive_bloom: bool,
 
     /// Skip chimera detection step (not recommended)
-    #[arg(long)]
+    #[arg(long, hide=true)]
     pub skip_chimera_detection: bool,
 
     /// Disable SNPmer clustering (not recommended, uses only k-mers)
@@ -110,6 +123,23 @@ pub struct ClusterArgs {
     #[arg(short, long, default_value = "17", help_heading = CLI_HEADINGS[1], hide = true)]
     pub kmer_size: usize,
 
+    /// Blockmer suffix length for polymorphic marker detection (experimental)
+    #[arg(long, default_value = "3", help_heading = CLI_HEADINGS[1], hide = true)]
+    pub blockmer_length: usize,
+
+    /// Use blockmers instead of SNPmers for polymorphic marker clustering (experimental)
+    #[arg(long, default_value_t = true, help_heading = CLI_HEADINGS[1], hide = true)]
+    pub use_blockmers: bool,
+
+    /// Allowable errors for bi-chimeric detection (higher = more sensitive, slower)
+    #[arg(long, default_value_t=1, help_heading = CLI_HEADINGS[3])]
+    pub chimera_allowable_errors: usize,
+
+    /// Length of near-perfect asv segment matches to consider for chimera detection (higher = less sensitive). Default is 1/10 of the minimum read length.
+    #[arg(long, help_heading = CLI_HEADINGS[3])]
+    pub chimera_detect_length: Option<usize>,
+
+
     /// Print help in markdown format
     #[arg(long, hide = true)]
     pub markdown_help: bool,
@@ -119,7 +149,7 @@ pub struct ClusterArgs {
     pub hifi: bool,
 
     /// Try phasing heterogeneous clusters
-    #[arg(long, help_heading = CLI_HEADINGS[2])]
+    #[arg(long, help_heading = CLI_HEADINGS[2], hide=true)]
     pub phase_heterogeneous: bool,
 }
 

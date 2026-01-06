@@ -10,7 +10,7 @@ use std::collections::HashMap;
 #[derive(Debug, Clone)]
 struct AsvMapping {
     asv_idx: usize,
-    tax_idx: String,  // Index into the unique tax_id list
+    _tax_idx: String,  // Index into the unique tax_id list
     hit_reference_id: String,
     index: usize, 
     identity: f64,
@@ -221,7 +221,7 @@ pub fn classify(args: &cli::ClassifyArgs, db: &taxonomy::Database) {
     let mappings: Vec<AsvMapping> = all_mappings.iter()
         .map(|(asv_idx, tax_id, identity, nm, depth, _, hit_reference_id)| AsvMapping {
             asv_idx: *asv_idx,
-            tax_idx: tax_id.clone(),
+            _tax_idx: tax_id.clone(),
             index: *tax_id_to_idx.get(tax_id).unwrap(),
             hit_reference_id: hit_reference_id.clone(),
             identity: *identity,
@@ -238,6 +238,7 @@ pub fn classify(args: &cli::ClassifyArgs, db: &taxonomy::Database) {
 
     // Step 8: Build classifications from EM results
     let mut classifications: Vec<taxonomy::AsvClassification> = Vec::new();
+    let mut secondary_classifications: Vec<taxonomy::AsvClassification> = Vec::new();
 
     for asv_idx in 0..consensus_sequences.len() {
         let (header, _) = &consensus_sequences[asv_idx];
@@ -250,6 +251,44 @@ pub fn classify(args: &cli::ClassifyArgs, db: &taxonomy::Database) {
             .collect();
 
         if !asv_mappings.is_empty() {
+            // Log all top hits for this ASV
+            log::debug!("ASV {} ({} depth, {} total hits):", asv_id, asv_depths[asv_idx], asv_mappings.len());
+
+            // Sort mappings by EM abundance (descending) to show best hits first
+            let mut sorted_mappings = asv_mappings.clone();
+            sorted_mappings.sort_by(|a, b| {
+                tax_abundances[b.index]
+                    .partial_cmp(&tax_abundances[a.index])
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+
+            for (rank, mapping) in sorted_mappings.iter().enumerate() {
+                let tax_id = &idx_to_tax_id[mapping.index];
+                log::debug!(
+                    "  Hit #{}: tax_id={}, species={}, identity={:.2}%, nm={}, EM_abundance={:.6}",
+                    rank + 1, tax_id, mapping.species, mapping.identity, mapping.nm, tax_abundances[mapping.index]
+                );
+
+                let taxonomy_entry = db.taxonomy.get(tax_id).unwrap();
+                let taxonomy_assignment = taxonomy::TaxonomyAssignment::from_taxonomy_entry(
+                    taxonomy_entry,
+                    mapping.identity,
+                    args.species_threshold,
+                    args.genus_threshold,
+                    &asv_header,
+                );
+                secondary_classifications.push(taxonomy::AsvClassification {
+                    asv_id: asv_id.clone(),
+                    asv_header: asv_header.clone(),
+                    abundance: asv_depths[asv_idx] as f64 / total_reads as f64,
+                    best_hit_tax_id: Some(tax_id.clone()),
+                    identity: Some(mapping.identity),
+                    taxonomy: Some(taxonomy_assignment),
+                    nm: Some(mapping.nm as usize),
+                    hit_reference_id: mapping.hit_reference_id.clone(),
+                });
+            }
+
             // Take the mapping with highest EM-estimated abundance (or first if tied)
             let best_mapping = asv_mappings.iter()
                 .max_by(|a, b| {
@@ -272,13 +311,8 @@ pub fn classify(args: &cli::ClassifyArgs, db: &taxonomy::Database) {
             let asv_depth = asv_depths[asv_idx];
             let abundance = asv_depth as f64 / total_reads as f64;
 
-            log::debug!(
-                "ASV {} -> tax_id {} (species: {}, identity: {:.2}%, EM abundance: {:.4})",
-                asv_id, tax_id, taxonomy_assignment.species, best_mapping.identity, tax_abundances[best_mapping.index]
-            );
-
             classifications.push(taxonomy::AsvClassification {
-                asv_id,
+                asv_id: asv_id.clone(),
                 asv_header,
                 abundance,
                 best_hit_tax_id: Some(tax_id.clone()),
@@ -287,6 +321,9 @@ pub fn classify(args: &cli::ClassifyArgs, db: &taxonomy::Database) {
                 nm: Some(best_mapping.nm as usize),
                 hit_reference_id: best_mapping.hit_reference_id.clone(),
             });
+
+            log::debug!("Classified ASV {}: tax_id_acc={}, tax_id_tax={}, species={}, genus ={}, abundance={:.6}",
+                asv_id, tax_id, taxonomy_entry.tax_id, taxonomy_entry.species, taxonomy_entry.genus, abundance);
         } else {
             // No alignment found
             classifications.push(taxonomy::AsvClassification {
@@ -323,7 +360,7 @@ pub fn classify(args: &cli::ClassifyArgs, db: &taxonomy::Database) {
     log::info!("Wrote genus abundance table to {}", genus_file.display());
 
     let mappings_file = output_dir_path.join("asv_mappings.tsv");
-    taxonomy::write_asv_mappings(&classifications, &mappings_file)
+    taxonomy::write_asv_mappings(&secondary_classifications, &mappings_file)
         .expect("Failed to write ASV mappings file");
     log::info!("Wrote ASV mappings table to {}", mappings_file.display());
 
@@ -333,7 +370,6 @@ pub fn classify(args: &cli::ClassifyArgs, db: &taxonomy::Database) {
 
     // Classified X species at species and genus level
     log::info!("Classified {}/{} ASVs at species level",
-        classifications.iter().filter(|c| c.taxonomy.is_some()).count(),
         classifications.iter()
             .filter(|c| {
                 if let Some(tax) = &c.taxonomy {
@@ -343,10 +379,11 @@ pub fn classify(args: &cli::ClassifyArgs, db: &taxonomy::Database) {
                 }
 
             })
-            .count());
+            .count(),
+        classifications.iter().filter(|c| c.taxonomy.is_some()).count(),
+        );
 
     log::info!("Classified {}/{} ASVs at genus level",
-        classifications.iter().filter(|c| c.taxonomy.is_some()).count(),
         classifications.iter()
             .filter(|c| {
                 if let Some(tax) = &c.taxonomy {
@@ -355,6 +392,9 @@ pub fn classify(args: &cli::ClassifyArgs, db: &taxonomy::Database) {
                     false
                 }
             })
-            .count());
+            .count(), 
+            classifications.iter().filter(|c| c.taxonomy.is_some()).count(),
+        );
+
 
 }
