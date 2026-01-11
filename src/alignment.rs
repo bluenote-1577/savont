@@ -276,7 +276,7 @@ pub fn align_and_consensus(twin_reads: &[TwinRead], clusters: Vec<Vec<usize>>, a
         lengths_and_i.sort_by_key(|k| k.0);
 
         // Check if we should use hierarchical consensus (for large clusters)
-        let use_hierarchical = cluster.len() > 100;
+        let use_hierarchical = cluster.len() > 100 && false;
         // Rank all sequences by quality-weighted identity to this seed
         let mut avg_qual_and_i: Vec<(_,_)> = avg_quals.iter().enumerate()
             .map(|(i, avg)| (*avg, i))
@@ -1403,7 +1403,7 @@ pub fn merge_similar_consensuses(
         .expect("Failed to create aligner");
 
     aligner.mapopt.set_no_diag();
-    aligner.mapopt.best_n = 25;
+    aligner.mapopt.best_n = 75;
     
     // Store mappings: (query_idx, target_idx, nm, target_depth)
     let mappings = Mutex::new(Vec::new());
