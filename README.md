@@ -1,6 +1,6 @@
 # savont - Amplicon Sequencing Variants (ASVs) and taxonomic profiling for long-read amplicon sequencing 
 
-**Savont** generates **Amplicon Sequence Variants (ASVs)** from Oxford Nanopore (ONT) R10.4 or PacBio HiFi amplicon sequencing data. Savont can also perform taxonomic classification for rRNA sequencing.
+**Savont** generates **Amplicon Sequence Variants (ASVs)** from Oxford Nanopore (ONT) R10.4 or PacBio HiFi amplicon sequencing data. 
 
 Unlike mapping-based approaches (e.g. Emu or ONT's epi2me workflow), savont follows the Reads -> ASV -> Classification paradigm (just like DADA2). This can lead to more confident species classifications and exact ASV mapping information that is lost from read-level analysis. 
 
@@ -136,7 +136,7 @@ final_consensus_1_depth_3081    3081    99.27   11      29466   Veillonella parv
 final_consensus_2_depth_2927    2927    99.40   9       29466   Veillonella parvula     Veillonella     29466:emu_db:36869
 ```
 
-One row per ASV with mapping statistics. The best mapping reference and its corresponding species/genus is denoted. 
+The best mapping references and their corresponding species/genus are denoted. 
 
 ## Algorithm Overview
 
