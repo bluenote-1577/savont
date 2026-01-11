@@ -2,16 +2,15 @@
 
 All notable changes to savont will be documented in this file.
 
-## [0.3.0] - XX
+## [0.3.0] - 2025-1-10
 
 ### Added
 
 - Detects cutadapt "rc" flag in fastq file and appropriately handles reverse complements.
 - Added `--use-blockmers` flag to enable experimental blockmer-based polymorphic marker clustering
-
-### Changed
-
-- Refactored `USE_BLOCKMER` constant to be a command-line argument (`--use-blockmers`) for better flexibility 
+- Slightly tweaked consensus generation algorithm. Not too much of a change
+- Fixed bugs with detecting chimeras. Should yield much better results for super high depth stuff. 
+- Much better logging.  
 
 ## [0.2.0] - 2025-12-29
 

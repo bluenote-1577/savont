@@ -90,7 +90,7 @@ pub struct ClusterArgs {
     pub n_depth_cutoff: usize,
 
     /// Use homopolymer-compressed sequences for clustering and consensus generation
-    #[arg(short, long, default_value_t=true, help_heading = CLI_HEADINGS[2], hide=true)]
+    #[arg(short, long, default_value_t=false, help_heading = CLI_HEADINGS[2], hide=true)]
     pub use_hpc: bool,
 
 
@@ -128,7 +128,7 @@ pub struct ClusterArgs {
     pub blockmer_length: usize,
 
     /// Use blockmers instead of SNPmers for polymorphic marker clustering (experimental)
-    #[arg(long, default_value_t = true, help_heading = CLI_HEADINGS[1], hide = true)]
+    #[arg(long, default_value_t = false, help_heading = CLI_HEADINGS[1], hide = true)]
     pub use_blockmers: bool,
 
     /// Allowable errors for bi-chimeric detection (higher = more sensitive, slower)

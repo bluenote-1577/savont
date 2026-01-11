@@ -39,17 +39,19 @@ fn main() {
 
 fn run_cluster(args: &cli::ClusterArgs, cli_args: &cli::Cli) {
     let output_dir = initialize_setup_cluster(args, cli_args);
+    let time_start = Instant::now();
 
     // Create temp directory for intermediate files
     let temp_dir = output_dir.join("temp");
     std::fs::create_dir_all(&temp_dir).expect("Failed to create temp directory");
     log::info!("Created temp directory for intermediate files: {}", temp_dir.display());
 
-    log::info!("Starting clustering...");
+    log::info!("=== SAVONT STARTED: Generating ASVs ===");
+    log::info!("=== STAGE 1: Processing k-mers and polymorphic markers ===");
 
     // Step 1: Process k-mers, count k-mers, and get SNPmers
     let (mut kmer_info, mut blockmer_info) = get_kmers_and_snpmers(&args, &temp_dir);
-    log_memory_usage(true, "STAGE 1: Obtained SNPmers");
+    log_memory_usage(true, "STAGE 1 DONE: Obtained SNPmers");
     log::info!("Using blockmers: {}", args.use_blockmers);
 
     // Step 1.5: Get twin reads from SNPmers
@@ -61,36 +63,32 @@ fn run_cluster(args: &cli::ClusterArgs, cli_args: &cli::Cli) {
         &temp_dir.join("binary_temp"),
     );
 
+    log::info!("=== STAGE 2: Clustering reads by k-mers ===");
     let clusters = asv_cluster::cluster_reads_by_kmers(&twin_reads, &args, &temp_dir);
+    log_memory_usage(true, "STAGE 2 DONE: Clustered reads by k-mers");
+
+    log::info!("=== STAGE 3: Secondary clustering of reads by polymorphic markers ===");
     let clusters = asv_cluster::cluster_reads_by_snpmers(&twin_reads, &clusters, &args, &temp_dir);
+    log_memory_usage(true, "STAGE 3 DONE: Clustered reads by polymorphic markers");
+
+    log::info!("=== STAGE 4: Generating consensus sequences and analyzing pileupes ===");
     let mut consensuses = alignment::align_and_consensus(&twin_reads, clusters, &args, &temp_dir);
-
     // Generate pileups for quality estimation
-    let mut pileups = alignment::generate_consensus_pileups(&twin_reads, &consensuses, &args);
-
-    // Update consensus HP lengths from modal values calculated from pileups
-    log::info!("Updating consensus HP lengths from pileup alignments");
-    for (consensus, pileup) in consensuses.iter_mut().zip(pileups.iter()) {
-        // Extract modal HP lengths from pileup
-        let modal_hp_lengths: Vec<u8> = pileup.iter().map(|p| p.ref_hp_length).collect();
-        consensus.hp_lengths = modal_hp_lengths;
-    }
+    let pileups = alignment::generate_consensus_pileups(&twin_reads, &mut consensuses, &args);
 
     // Estimate quality error rates from top 10% of clusters
     let quality_error_map = alignment::estimate_quality_error_rates(&pileups, &consensuses, 0.1);
 
     // Analyze pileup consensuses 
-    let mut low_qual_consensus = alignment::analyze_pileup_consensuses(&mut pileups, &mut consensuses, &quality_error_map, &twin_reads, &args, &temp_dir);
-    log_memory_usage(true, "STAGE 2: Analyzed pileup consensus sequences");
+    let mut low_qual_consensus = alignment::analyze_pileup_consensuses(pileups, &mut consensuses, &quality_error_map, &twin_reads, &args, &temp_dir);
+    log_memory_usage(true, "STAGE 4 DONE: Analyzed pileups and estimated consensus qualities");
 
     // Decompress HPC sequences before merging and chimera detection
-    log::info!("Decompressing {} HPC consensus sequences for merging and chimera detection", consensuses.len());
     for consensus in &mut consensuses {
         consensus.decompress();
     }
 
     // Decompress low quality consensus sequences as well
-    log::info!("Decompressing {} low quality HPC consensus sequences", low_qual_consensus.len());
     for consensus in &mut low_qual_consensus {
         consensus.decompress();
     }
@@ -100,19 +98,22 @@ fn run_cluster(args: &cli::ClusterArgs, cli_args: &cli::Cli) {
 
     // Merge similar consensus sequences based on alignment and depth (using decompressed sequences)
     // This also merges low quality consensuses into high quality ones
+    log::info!("=== STAGE 5: Merging similar consensus sequences ===");
     let mut consensuses = alignment::merge_similar_consensuses(&twin_reads, consensuses, low_qual_consensus, &args, &temp_dir);
-    log_memory_usage(true, "STAGE 3: Merged similar consensus sequences");
+    log_memory_usage(true, "STAGE 5 DONE: Merged similar consensus sequences");
 
     // Detect and filter chimeric consensus sequences
     if args.skip_chimera_detection {
         log::info!("Skipping chimera detection as per user request.");
         return;
     }
+
+    log::info!("=== STAGE 6: Detecting and filtering chimeric consensus sequences ===");
     let chimeras = chimera::detect_chimeras(&mut consensuses, &args);
     let mut consensuses = chimera::filter_chimeras(consensuses, &chimeras);
-    log_memory_usage(true, "STAGE 4: Filtered chimeric consensus sequences");
+    log_memory_usage(true, "STAGE 6 DONE: Filtered chimeric consensus sequences");
 
-    log::info!("Final consensus count after chimera filtering: {}", consensuses.len());
+    log::info!("=== Final consensus count after chimera filtering: {} ===", consensuses.len());
 
     // Check for within-ASV heterogeneity
     // if args.phase_heterogeneous {
@@ -121,9 +122,10 @@ fn run_cluster(args: &cli::ClusterArgs, cli_args: &cli::Cli) {
     // }
 
     // Refine ASV depths using EM algorithm on read-level mappings
+    log::info!("=== STAGE 7: Refining ASV depths with alignments and EM algorithm ===");
     alignment::refine_asv_depths_with_em(&twin_reads, &mut consensuses, &kmer_info, &args, &temp_dir);
     consensuses.sort_by(|a, b| b.depth.partial_cmp(&a.depth).unwrap());
-    log_memory_usage(true, "STAGE 5: Refined ASV depths with EM algorithm");
+    log_memory_usage(true, "STAGE 7 DONE: Refined ASV depths with EM algorithm");
 
     log::info!("Final consensus count after EM refinement: {}", consensuses.len());
 
@@ -140,7 +142,7 @@ fn run_cluster(args: &cli::ClusterArgs, cli_args: &cli::Cli) {
     let final_clusters = output_dir.join("final_clusters.tsv");
     alignment::write_clusters_tsv(&consensuses, &twin_reads, &final_clusters, "final")
         .expect("Failed to write final_clusters.tsv");
-    log::info!("Wrote final cluster information to final_clusters.tsv");
+    log::info!("=== SAVONT COMPLETED SUCCESSFULLY in {:?} SECONDS ===", time_start.elapsed().as_secs());
 }
 
 fn run_classify(args: &cli::ClassifyArgs, cli_args: &cli::Cli) {

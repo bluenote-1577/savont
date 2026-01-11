@@ -1,5 +1,6 @@
 
 pub const ASV_FILE: &str = "final_asvs.fasta";
+pub const MAX_INSERTION_LENGTH: usize = 2;
 //pub const ID_CUTOFF: f64 = 0.999;
 pub const FORWARD_READ_SAFE_SEARCH_CUTOFF: usize = 10000;
 //foward_read_safe_search_cutoff: usize = 10000;
@@ -31,6 +32,7 @@ pub const MAX_BLOCK_SIZE: usize = 128;
 pub const MAX_OL_POLISHING: usize = 75;
 pub const READ_BLOCK_SIZE_FOR_COVERAGE: usize = 50_000;
 pub const OVERLAP_HANG_LENGTH: usize = 750;
+pub const DEFAULT_ERR_RATE: f64 = 0.02;
 
 //At most 1/20 k-mers are snpmers. 
 pub const MAX_FRACTION_OF_SNPMERS_IN_READ: f64 = 1./20.;

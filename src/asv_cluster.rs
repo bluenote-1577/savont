@@ -109,7 +109,7 @@ pub fn cluster_reads_by_kmers(
             } else {
                 // Get top candidates sorted by number of bucket hits
                 let mut candidates: Vec<(usize, usize)> = bucket_hits.into_iter().collect();
-                candidates.sort_by(|a, b| b.1.cmp(&a.1)); // Sort by hits descending
+                candidates.sort_by(|a, b| (b.1, b.0).cmp(&(a.1, a.0))); // Sort by hits descending
                 //println!("Top candidates for read {}: {:?}", read_id, &candidates[..candidates.len().min(5)]);
 
                 // Find the maximum number of hits
