@@ -2,7 +2,7 @@
 
 **Savont** generates [**Amplicon Sequence Variants (ASVs)**](https://en.wikipedia.org/wiki/Amplicon_sequence_variant) for taxonomic profiling using amplicon sequencing data from either
 
-- Oxford Nanopore (ONT) R10.4 sequencing
+- Oxford Nanopore (ONT) R10.4 sequencing (preferably with SUP basecalling)
 - PacBio HiFi sequencing
 
 Unlike mapping-based approaches (e.g. Emu or ONT's epi2me workflow), savont follows the Reads -> ASV -> Classification paradigm (just like DADA2). This can lead to more confident species classifications and ASV classification information that is lost from read-level analysis. 
