@@ -1,9 +1,11 @@
-# savont - Amplicon Sequencing Variants (ASVs) and taxonomic profiling for long-read amplicon sequencing 
+# savont - Amplicon Sequence Variants (ASVs) and taxonomic profiling for long read amplicons
 
 **Savont** generates [**Amplicon Sequence Variants (ASVs)**](https://en.wikipedia.org/wiki/Amplicon_sequence_variant) for taxonomic profiling using amplicon sequencing data from either
 
-- Oxford Nanopore (ONT) R10.4 sequencing
+- Oxford Nanopore (ONT) R10.4 sequencing (preferably with SUP basecalling)
 - PacBio HiFi sequencing
+
+## Why savont?
 
 Unlike mapping-based approaches (e.g. Emu or ONT's epi2me workflow), savont follows the Reads -> ASV -> Classification paradigm (just like DADA2). This can lead to more confident species classifications and ASV classification information that is lost from read-level analysis. 
 
@@ -39,6 +41,8 @@ savont --help
 ```
 
 ### Option 2: Conda
+[![Anaconda-Server Badge](https://anaconda.org/bioconda/savont/badges/version.svg)](https://anaconda.org/bioconda/savont)
+[![Anaconda-Server Badge](https://anaconda.org/bioconda/savont/badges/latest_release_date.svg)](https://anaconda.org/bioconda/savont)
 
 ```sh
 mamba install -c bioconda savont
@@ -47,7 +51,30 @@ mamba install -c bioconda savont
 
 ## Quick start
 
-### Step 1: Download a reference database
+### Step 1: Generate ASVs from reads
+
+```sh
+# Full-length 16S rRNA reads -> ASVs
+savont asv 16s_full-length.fastq.gz -o savont-out -t 20 
+
+# Full bacterial rRNA operon amplicons -> ASVs
+savont asv operon_reads.fastq.gz -o savont-out -t 20 --rrna-operon
+
+# For single-stranded protocols
+savont asv 16s_single_strand.fq --single-strand -o savont-out -t 20
+
+# Other types of amplicons with known length
+savont asv amplicons.fastq.gz -o savont-out -t 20 --min-read-length 1600 --max-read-length 2100 
+
+# Resulting ASVs
+ls savont-out/final_asvs.fasta
+```
+
+## Taxonomic profiling against SILVA or Emu database
+
+Savont can also classify ASVs and generate a taxonomic profile with abundances. 
+
+### Step 2: Download a reference database
 
 ```sh
 # Download EMU database
@@ -58,22 +85,7 @@ savont download --location databases --silva-db
 
 ```
 
-### Step 2: Generate ASVs from reads
-
-```sh
-# Cluster full-length 16S rRNA reads into ASVs
-savont asv reads.fastq.gz -o savont-out -t 20 --min-read-length 1100 --max-read-length 2000 
-
-# Cluster full bacterial rRNA operon amplicons into ASVs
-savont asv reads.fastq.gz -o savont-out -t 20 --min-read-length 4000 --max-read-length 6500 
-
-# For single-stranded protocols
-savont asv --single-strand -o savont-out -t 20
-
-ls savont-out/final_asvs.fasta
-```
-
-### (Optional) Step 3: Classify prokaryotic rRNA ASVs
+### Step 3: Classify prokaryotic rRNA ASVs
 
 ```sh
 # Classify using EMU database
