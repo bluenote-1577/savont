@@ -21,10 +21,6 @@ use std::path::PathBuf;
 use std::time::Instant;
 use sysinfo::System;
 use fxhash::FxHashSet;
-use tikv_jemallocator::Jemalloc;
-
-#[global_allocator]
-static GLOBAL: Jemalloc = Jemalloc;
 
 fn main() {
     let args = cli::Cli::parse();
