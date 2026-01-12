@@ -1,4 +1,4 @@
-# savont - Amplicon Sequencing Variants (ASVs) and taxonomic profiling for long-read amplicon sequencing 
+# savont - Amplicon Sequence Variants (ASVs) and taxonomic profiling for long read amplicons
 
 **Savont** generates [**Amplicon Sequence Variants (ASVs)**](https://en.wikipedia.org/wiki/Amplicon_sequence_variant) for taxonomic profiling using amplicon sequencing data from either
 
