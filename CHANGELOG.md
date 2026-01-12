@@ -11,6 +11,7 @@ All notable changes to savont will be documented in this file.
 - Slightly tweaked consensus generation algorithm. Not too much of a change
 - Fixed bugs with detecting chimeras. Should yield much better results for super high depth stuff. 
 - Much better logging.  
+- Added presets for operon processing. 
 
 ## [0.2.0] - 2025-12-29
 
