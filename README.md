@@ -62,13 +62,13 @@ savont download --location databases --silva-db
 
 ```sh
 # Cluster full-length 16S rRNA reads into ASVs
-savont asv reads.fastq.gz -o savont-out -t 20 --min-read-length 1100 --max-read-length 2000 
+savont asv 16s_full-length.fastq.gz -o savont-out -t 20 --min-read-length 1100 --max-read-length 2000 
 
 # Cluster full bacterial rRNA operon amplicons into ASVs
-savont asv reads.fastq.gz -o savont-out -t 20 --min-read-length 4000 --max-read-length 6500 
+savont asv operon_reads.fastq.gz -o savont-out -t 20 --rrna-operon
 
 # For single-stranded protocols
-savont asv --single-strand -o savont-out -t 20
+savont asv 16s_single_strand.fq --single-strand -o savont-out -t 20
 
 ls savont-out/final_asvs.fasta
 ```
