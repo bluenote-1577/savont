@@ -39,6 +39,8 @@ savont --help
 ```
 
 ### Option 2: Conda
+[![Anaconda-Server Badge](https://anaconda.org/bioconda/savont/badges/version.svg)](https://anaconda.org/bioconda/savont)
+[![Anaconda-Server Badge](https://anaconda.org/bioconda/savont/badges/latest_release_date.svg)](https://anaconda.org/bioconda/savont)
 
 ```sh
 mamba install -c bioconda savont
