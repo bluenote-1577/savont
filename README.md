@@ -51,18 +51,7 @@ mamba install -c bioconda savont
 
 ## Quick start
 
-### Step 1: Download a reference database
-
-```sh
-# Download EMU database
-savont download --location databases --emu-db
-
-# Or download SILVA database
-savont download --location databases --silva-db
-
-```
-
-### Step 2: Generate ASVs from reads
+### Step 1: Generate ASVs from reads
 
 ```sh
 # Cluster full-length 16S rRNA reads into ASVs
@@ -74,10 +63,29 @@ savont asv operon_reads.fastq.gz -o savont-out -t 20 --rrna-operon
 # For single-stranded protocols
 savont asv 16s_single_strand.fq --single-strand -o savont-out -t 20
 
+# Other types of amplicons with known length
+savont asv amplicons.fastq.gz -o savont-out -t 20 --min-read-length 1600 --max-read-length 2100 
+
+# Results
 ls savont-out/final_asvs.fasta
 ```
 
-### (Optional) Step 3: Classify prokaryotic rRNA ASVs
+## Taxonomic profiling against SILVA or Emu database
+
+Savont can also classify ASVs and generate a taxonomic profile with abundances. 
+
+### Step 2: Download a reference database
+
+```sh
+# Download EMU database
+savont download --location databases --emu-db
+
+# Or download SILVA database
+savont download --location databases --silva-db
+
+```
+
+### Step 3: Classify prokaryotic rRNA ASVs
 
 ```sh
 # Classify using EMU database
