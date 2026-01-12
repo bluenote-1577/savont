@@ -1,6 +1,6 @@
 [package]
 name = "savont"
-version = "0.3.1"
+version = "0.3.2"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 #build = "build.rs"
@@ -30,7 +30,6 @@ clap-num = "1.2.0"
 clap-markdown = { git = "https://github.com/bluenote-1577/clap-markdown.git" }
 minimap2 = "0.1.28"
 spoa_rs = "0.1"
-block-aligner = { version = "0.5", features = ["simd_avx2"] }
 #triple_accel = "0.4"
 
 [target.'cfg(target_arch = "aarch64")'.features]

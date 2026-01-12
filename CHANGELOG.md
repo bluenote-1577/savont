@@ -2,7 +2,7 @@
 
 All notable changes to savont will be documented in this file.
 
-## [0.3.1] - 2025-1-10
+## [0.3.2] - 2025-1-10
 
 ### Added
 
