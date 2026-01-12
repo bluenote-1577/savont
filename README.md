@@ -54,10 +54,10 @@ mamba install -c bioconda savont
 ### Step 1: Generate ASVs from reads
 
 ```sh
-# Cluster full-length 16S rRNA reads into ASVs
-savont asv 16s_full-length.fastq.gz -o savont-out -t 20 --min-read-length 1100 --max-read-length 2000 
+# Full-length 16S rRNA reads -> ASVs
+savont asv 16s_full-length.fastq.gz -o savont-out -t 20 
 
-# Cluster full bacterial rRNA operon amplicons into ASVs
+# Full bacterial rRNA operon amplicons -> ASVs
 savont asv operon_reads.fastq.gz -o savont-out -t 20 --rrna-operon
 
 # For single-stranded protocols
@@ -66,7 +66,7 @@ savont asv 16s_single_strand.fq --single-strand -o savont-out -t 20
 # Other types of amplicons with known length
 savont asv amplicons.fastq.gz -o savont-out -t 20 --min-read-length 1600 --max-read-length 2100 
 
-# Results
+# Resulting ASVs
 ls savont-out/final_asvs.fasta
 ```
 
