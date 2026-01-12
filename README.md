@@ -5,6 +5,8 @@
 - Oxford Nanopore (ONT) R10.4 sequencing (preferably with SUP basecalling)
 - PacBio HiFi sequencing
 
+## Why savont?
+
 Unlike mapping-based approaches (e.g. Emu or ONT's epi2me workflow), savont follows the Reads -> ASV -> Classification paradigm (just like DADA2). This can lead to more confident species classifications and ASV classification information that is lost from read-level analysis. 
 
 ## What can savont do?
