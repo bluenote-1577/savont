@@ -21,6 +21,11 @@ use std::path::PathBuf;
 use std::time::Instant;
 use sysinfo::System;
 use fxhash::FxHashSet;
+use tikv_jemallocator::Jemalloc;
+
+#[global_allocator]
+static GLOBAL: Jemalloc = Jemalloc;
+
 fn main() {
     let args = cli::Cli::parse();
 
@@ -38,7 +43,10 @@ fn main() {
 }
 
 fn run_cluster(args: &cli::ClusterArgs, cli_args: &cli::Cli) {
-    let output_dir = initialize_setup_cluster(args, cli_args);
+    let mut args = args.clone();
+    let output_dir = initialize_setup_cluster(&mut args, cli_args);
+    let args = args; // make immutable after setup
+
     let time_start = Instant::now();
 
     // Create temp directory for intermediate files
@@ -136,7 +144,7 @@ fn run_cluster(args: &cli::ClusterArgs, cli_args: &cli::Cli) {
         .expect(format!("Failed to write {}", ASV_FILE).as_str());
     log::info!("Wrote {} final consensus sequences to {}", consensuses.len(), ASV_FILE);
 
-    debug_consensus_twin_read(&kmer_info, &consensuses, args);
+    debug_consensus_twin_read(&kmer_info, &consensuses, &args);
 
     // Write final cluster information
     let final_clusters = output_dir.join("final_clusters.tsv");
@@ -271,7 +279,7 @@ fn my_own_format(
     )
 }
 
-fn initialize_setup_cluster(args: &cli::ClusterArgs, cli_args: &cli::Cli) -> PathBuf {
+fn initialize_setup_cluster(args: &mut cli::ClusterArgs, cli_args: &cli::Cli) -> PathBuf {
 
     if args.markdown_help {
         let markdown_options = clap_markdown::MarkdownOptions::default();
@@ -332,6 +340,14 @@ fn initialize_setup_cluster(args: &cli::ClusterArgs, cli_args: &cli::Cli) -> Pat
         log::error!("K-mer size must be odd");
         std::process::exit(1);
     }
+
+    // Preset matching
+    if args.rrna_operon {
+        log::info!("=== PRESET: Using rRNA operon preset. Adjusting parameters... ===");
+        args.min_read_length = 3500;
+        args.max_read_length = 5000;
+    }
+
     // Initialize thread pool, bigger stack size because sorting k-mers fails otherwise...
     rayon::ThreadPoolBuilder::new()
         .num_threads(args.threads)

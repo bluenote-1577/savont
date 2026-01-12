@@ -103,14 +103,19 @@ pub fn twin_reads_from_snpmers(kmer_info: &mut KmerGlobalInfo, blockmer_info: &m
         let (mut tx, rx) = spmc::channel();
         let min_read_length = *Arc::clone(&arc_minrl);
         let max_read_length = *Arc::clone(&arc_maxrl);
+        let fastq_file_clone = fastq_file.clone();
 
         thread::spawn(move || {
             let mut reader = needletail::parse_fastx_file(fastq_file).expect("valid path");
+            let mut number_reads = 0;
+            let mut number_reads_removed = 0;
             while let Some(record) = reader.next() {
                 let rec = record.expect("Error reading record");
                 let seq;
+                number_reads += 1;
                 seq = rec.seq().to_vec();
                 if seq.len() < min_read_length || seq.len() > max_read_length {
+                    number_reads_removed += 1;
                     continue;
                 }
                 let id = String::from_utf8_lossy(rec.id()).to_string();
@@ -121,8 +126,16 @@ pub fn twin_reads_from_snpmers(kmer_info: &mut KmerGlobalInfo, blockmer_info: &m
                     tx.send((seq, None, id)).unwrap();
                 }
             }
+            if number_reads_removed > number_reads / 2{
+                log::warn!("More than 50% of reads were removed in fastq file {} due to length filtering (min: {}, max: {}). Please check your input reads and filtering parameters.", 
+                    fastq_file_clone.to_str().unwrap(), min_read_length, max_read_length);
+            }
+            log::info!("Number of reads removed due to length filtering: {}.", 
+                number_reads_removed);
+
         });
 
+        
         let mut handles = Vec::new();
         let k = args.kmer_size;
         let c = args.c;
@@ -207,6 +220,8 @@ pub fn twin_reads_from_snpmers(kmer_info: &mut KmerGlobalInfo, blockmer_info: &m
         for handle in handles {
             handle.join().unwrap();
         }
+
+        
     }
 
     kmer_info.solid_kmers = Arc::try_unwrap(arc_solid).unwrap();

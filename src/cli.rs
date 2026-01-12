@@ -52,6 +52,14 @@ pub struct ClusterArgs {
     #[arg(long, hide = true)]
     pub clean_dir: bool,
 
+    /// 16s rRNA full length (~1500 bp) amplicon preset (default; does nothing)
+    #[arg(long, default_value_t = false, help_heading = CLI_HEADINGS[5])]
+    pub fl_16s: bool,
+
+    /// rRNA operon (~4000 bp) amplicon preset (--min-read-length 3500 --max-read-length 5000)
+    #[arg(long, default_value_t = false, help_heading = CLI_HEADINGS[5])]
+    pub rrna_operon: bool,
+
     /// K-mer sampling rate: select 1 out of every C k-mers (higher = faster, less memory, slightly less sensitive)
     #[arg(short, long, default_value = "11", help_heading = CLI_HEADINGS[0], hide = true)]
     pub c: usize,
@@ -79,7 +87,6 @@ pub struct ClusterArgs {
     /// Minimum number of reads required to keep a cluster (ASV)
     #[arg(long, default_value_t=12, help_heading = CLI_HEADINGS[1])]
     pub min_cluster_size: usize,
-
     
     /// Bloom filter size in GB for k-mer filtering (0 = auto, increase for very large datasets)
     #[arg(short, long, default_value_t=0., help_heading = CLI_HEADINGS[1], hide=true)]

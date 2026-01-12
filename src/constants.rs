@@ -65,10 +65,11 @@ pub const MAX_ALLOWABLE_SNPMER_ERROR_DIVIDER: usize = 200;
 pub const DEDUP_SNPMERS: bool = true;
 
 
-pub const CLI_HEADINGS: [&str; 5] = [
+pub const CLI_HEADINGS: [&str; 6] = [
     "Input/Output Options",
     "Clustering Parameters",
     "Consensus Parameters",
     "Chimera Detection Options",
     "Advanced Options",
+    "Parameter Presets",
 ];
