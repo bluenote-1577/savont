@@ -22,6 +22,18 @@ Savont is designed for high-accuracy long-read amplicon sequencing (>98% accurac
 > Savont is optimized for long reads with >98% accuracy. R10.4 SUP ONT reads or HiFi are preferred.
 > For lower quality reads (e.g. R9.4 ONT data or HAC/FAST base-called data) savont may **not** be useful.
 
+## Preliminary results
+
+We have compiled some [very preliminary results available here](https://github.com/bluenote-1577/savont/wiki/Savont-Preliminary-Results).
+
+<p align="center">
+<img width="60%" alt="detection_probability_vs_depth_nm_0" src="https://github.com/user-attachments/assets/19dbacad-2856-4888-a75e-0f1406f73265" />
+</p>
+<p align="center">
+Savont is an order of magnitude (or two) more sensitive for ASV retrieval compared to denoising methods for ONT R10.4 sup reads. Yet, it can retrieve most ASVs (i.e., exact, multi-copy 16s sequences) in this dataset (Zymo Microbial Community Standard). 
+</p>
+
+
 ## Install via conda or build from source
 
 ### Option 1: Build from source
@@ -195,9 +207,9 @@ See [the changelog.](CHANGELOG.md)
 
 ## Citation
 
-FORTHCOMING. 
+FORTHCOMING WORK involving J. Shaw, M. Risgaard-Jensen, K.S. Andersen, R. Kirkegaard, M.K.D. Dueholm, H. Li, and others.
 
-If you use SILVA or EMU databases, cite:
+**If you use SILVA or EMU databases, cite:**
 
 1. Quast, Christian, et al. "The SILVA ribosomal RNA gene database project: improved data processing and web-based tools." Nucleic acids research 41.D1 (2012): D590-D596.
 
