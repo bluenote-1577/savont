@@ -7,7 +7,14 @@
 
 ## Why savont?
 
-Unlike mapping-based approaches (e.g. Emu or ONT's epi2me workflow), savont follows the Reads -> ASV -> Classification paradigm (just like DADA2). This can lead to more confident species classifications and ASV classification information that is lost from read-level analysis. 
+Savont differs from mapping-based approaches (e.g. Emu or ONT's epi2me workflow). Savont instead follows the Reads -> ASV -> Classification paradigm (just like DADA2, but for long reads).
+
+At the cost of some sensitivity, using ASVs can lead to 
+
+1. more confident species classifications
+2. avoiding misclassification against incomplete databases
+3. better interpretability for downstream analysis
+
 
 ## What can savont do?
 
