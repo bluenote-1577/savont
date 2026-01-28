@@ -5,18 +5,19 @@
 - Oxford Nanopore (ONT) R10.4 sequencing (preferably with SUP basecalling)
 - PacBio HiFi sequencing
 
-## Why savont?
-
 Savont differs from mapping-based approaches (e.g. Emu or ONT's epi2me workflow). Savont instead follows the Reads -> ASV -> Classification paradigm (just like DADA2, but for long reads).
+
+## Why savont?
 
 At the cost of some sensitivity, using ASVs can lead to 
 
 1. more confident species classifications
-2. avoiding misclassification against incomplete databases
+2. avoids misclassification against incomplete databases
 3. better interpretability for downstream analysis
 
+Savont also has built-in support for full taxonomic profiling (amplicons -> abundances) for SILVA and EMU rRNA databases.
 
-## What can savont do?
+## What are savont's inputs and outputs? 
 
 Savont is designed for high-accuracy long-read amplicon sequencing (>98% accuracy). It can:
 
