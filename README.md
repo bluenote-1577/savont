@@ -72,7 +72,7 @@ ls savont-out/final_asvs.fasta
 
 ## Taxonomic profiling against SILVA or Emu database
 
-Savont can also classify ASVs and generate a taxonomic profile with abundances. 
+ASVs from Step 1 can be used as input to other tools for profiling. Otherwise, savont can also classify ASVs and generate a taxonomic profile with abundances. 
 
 ### Step 2: Download a reference database
 
