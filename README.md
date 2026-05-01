@@ -7,10 +7,6 @@
 
 Savont differs from mapping-based approaches (e.g. Emu or ONT's epi2me workflow). Savont instead follows the Reads -> ASV -> Classification paradigm (just like DADA2, but for noisier long reads).
 
-<p align="center">
-    <img alt="github-diagram" src="https://github.com/user-attachments/assets/bf200337-2208-4336-9c5c-6a164e57b3ec" width="90%" />
-</p>
-
 ## Why savont?
 
 - Savont can resolve ASVs that differ by a single nucleotide. This differs from existing long-read workflows that do fuzzy OTU-like clustering.
@@ -20,6 +16,10 @@ Savont differs from mapping-based approaches (e.g. Emu or ONT's epi2me workflow)
 > [!NOTE]
 > Savont is optimized for long reads with >98% accuracy. ONT's R10.4 reads with SUP basecalling or PacBio HiFi are preferred.
 > For lower quality reads (e.g. R9.4 ONT data) savont may **not** be useful.
+
+<p align="center">
+    <img alt="github-diagram" src="https://github.com/user-attachments/assets/bf200337-2208-4336-9c5c-6a164e57b3ec" width="90%" />
+</p>
 
 ## Preliminary results
 
