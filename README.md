@@ -8,7 +8,7 @@
 Savont differs from mapping-based approaches (e.g. Emu or ONT's epi2me workflow). Savont instead follows the Reads -> ASV -> Classification paradigm (just like DADA2, but for noisier long reads).
 
 <p align="center">
-    <img alt="github-diagram" src="https://github.com/user-attachments/assets/bf200337-2208-4336-9c5c-6a164e57b3ec" width="75%" />
+    <img alt="github-diagram" src="https://github.com/user-attachments/assets/bf200337-2208-4336-9c5c-6a164e57b3ec" width="90%" />
 </p>
 
 ## Why savont?
