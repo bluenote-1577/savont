@@ -487,7 +487,7 @@ impl TaxonomyAssignment {
                 species_subgroup: String::new(),
                 species_group: String::new(),
             }
-        } else if identity >= 75.0 {
+        } else if identity >= 86.5 {
             // Family-level classification
             Self {
                 tax_id: entry.tax_id.clone(),
@@ -496,6 +496,54 @@ impl TaxonomyAssignment {
                 family: entry.family.clone(),
                 order: entry.order.clone(),
                 class: entry.class.clone(),
+                phylum: entry.phylum.clone(),
+                clade: entry.clade.clone(),
+                superkingdom: entry.superkingdom.clone(),
+                subspecies: String::new(),
+                species_subgroup: String::new(),
+                species_group: String::new(),
+            }
+        } else if identity >= 82.0 {
+            // Order-level classification
+            Self {
+                tax_id: entry.tax_id.clone(),
+                species: unclassified_marker.clone(),
+                genus: unclassified_marker.clone(),
+                family: unclassified_marker.clone(),
+                order: entry.order.clone(),
+                class: entry.class.clone(),
+                phylum: entry.phylum.clone(),
+                clade: entry.clade.clone(),
+                superkingdom: entry.superkingdom.clone(),
+                subspecies: String::new(),
+                species_subgroup: String::new(),
+                species_group: String::new(),
+            }
+        } else if identity >= 78.5 {
+            // Class-level classification
+            Self {
+                tax_id: entry.tax_id.clone(),
+                species: unclassified_marker.clone(),
+                genus: unclassified_marker.clone(),
+                family: unclassified_marker.clone(),
+                order: unclassified_marker.clone(),
+                class: entry.class.clone(),
+                phylum: entry.phylum.clone(),
+                clade: entry.clade.clone(),
+                superkingdom: entry.superkingdom.clone(),
+                subspecies: String::new(),
+                species_subgroup: String::new(),
+                species_group: String::new(),
+            }
+        } else if identity >= 75.0 {
+            // Phylum-level classification
+            Self {
+                tax_id: entry.tax_id.clone(),
+                species: unclassified_marker.clone(),
+                genus: unclassified_marker.clone(),
+                family: unclassified_marker.clone(),
+                order: unclassified_marker.clone(),
+                class: unclassified_marker.clone(),
                 phylum: entry.phylum.clone(),
                 clade: entry.clade.clone(),
                 superkingdom: entry.superkingdom.clone(),
@@ -696,24 +744,19 @@ pub fn write_asv_mappings(
 ) -> std::io::Result<()> {
     let mut file = File::create(output_path)?;
 
-    // Write header
     writeln!(
         file,
-        "asv_header\tdepth\talignment_identity\tnumber_mismatches\ttax_id\tspecies\tgenus\treference"
+        "asv_header\tdepth\talignment_identity\tnumber_mismatches\ttax_id\tspecies\tgenus\tfamily\torder\tclass\tphylum\tclade\tsuperkingdom\treference"
     )?;
 
     for classification in classifications {
-        // Extract depth from header (format: final_consensus_0_depth_42)
         let depth_str = extract_depth_string(&classification.asv_header);
 
         if let Some(ref taxonomy) = classification.taxonomy {
             if let Some(identity) = classification.identity {
-                // Calculate approximate values
-                // We don't have the exact mapping length and NM stored, so we'll need to add them
-                // For now, write what we have
                 writeln!(
                     file,
-                    "{}\t{}\t{:.2}\t{}\t{}\t{}\t{}\t{}",
+                    "{}\t{}\t{:.2}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
                     classification.asv_header,
                     depth_str,
                     identity,
@@ -721,14 +764,19 @@ pub fn write_asv_mappings(
                     classification.best_hit_tax_id.as_ref().unwrap_or(&String::from("NA")),
                     taxonomy.species,
                     taxonomy.genus,
+                    taxonomy.family,
+                    taxonomy.order,
+                    taxonomy.class,
+                    taxonomy.phylum,
+                    taxonomy.clade,
+                    taxonomy.superkingdom,
                     classification.hit_reference_id,
                 )?;
             }
         } else {
-            // Unclassified ASV
             writeln!(
                 file,
-                "{}\t{}\tNA\tNA\tNA\tNA\tUNCLASSIFIED\tUNCLASSIFIED",
+                "{}\t{}\tNA\tNA\tNA\tUNCLASSIFIED\tUNCLASSIFIED\tUNCLASSIFIED\tUNCLASSIFIED\tUNCLASSIFIED\tUNCLASSIFIED\tUNCLASSIFIED\tUNCLASSIFIED\tUNCLASSIFIED",
                 classification.asv_header,
                 depth_str,
             )?;

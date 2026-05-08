@@ -11,7 +11,7 @@ Savont differs from mapping-based approaches (e.g. Emu or ONT's epi2me workflow)
 
 - Savont can resolve ASVs that differ by a single nucleotide. This differs from existing long-read workflows that do fuzzy OTU-like clustering.
 - For ONT amplicons, savont requires ~10x less depth to generate ASVs compared to DADA2 / UNOISE.
-- Savont also has built-in support for full taxonomic profiling (fastq -> abundance table) for several rRNA databases. 
+- Savont also has built-in support for full taxonomic profiling (fastq -> abundance table -> QIIME) for several rRNA databases. 
 
 > [!NOTE]
 > Savont is optimized for long reads with >98% accuracy. ONT's R10.4 reads with SUP basecalling or PacBio HiFi are preferred.
@@ -56,9 +56,25 @@ mamba install -c bioconda savont
 # or use conda instead of mamba
 ```
 
-## Quick start
+## Quick start for trimmed full-length 16S amplicons
 
-### Step 1: Generate ASVs from reads
+```sh
+# generate 16S ASVs for ONT / HiFi after cutadapt
+savont asv 16s_full-length_trimmed.fastq.gz -o savont-out -t 20 (optional: --hifi)
+
+# download Greengenes, EMU, or silva databases
+savont download --location /path/databases --dbs greengenes2-2024.09 emu-1 silva-138.2
+
+# classify against any database
+savont classify -i savont-out -d /path/databases/emu-1 -t 20
+
+# merge multiple savont outputs --> feeds into QIIME2 (optional)
+savont merge -i savont-out1 savont-out2 -o merged_output
+```
+
+# Full subcommand guide
+
+## Generate ASVs from reads (`savont asv`)
 
 > [!NOTE]
 > Savont filters reads based on length and quality. However, savont does not do adapter/primer trimming. Please trim your reads with e.g. [cutadapt](https://cutadapt.readthedocs.io/en/stable/) first. 
@@ -79,35 +95,21 @@ savont asv amplicons.fastq.gz -o savont-out -t 20 --min-read-length 1600 --max-r
 ls savont-out/final_asvs.fasta
 ```
 
-### Importing ASVs into QIIME2
+### ASV output
 
-If you prefer to use QIIME: `savont asv` writes a `feature-table.tsv` alongside `final_asvs.fasta`. Use these two files to create QIIME2 artifacts:
+The `savont asv` command produces:
 
-```sh
-# Convert TSV feature table to BIOM format (requires the biom-format package)
-biom convert -i savont-out/feature-table.tsv -o feature-table.biom \
-    --table-type="OTU table" --to-hdf5
+1. **final_asvs.fasta** - Final ASV sequences (high-quality, chimera-filtered)
+2. **feature-table.tsv** - QIIME2-compatible feature table (ASV × sample read counts)
+3. **final_clusters.tsv** - Cluster assignments mapping reads to ASVs
+4. **temp/** - Directory containing intermediate files
 
-# Import feature table
-qiime tools import \
-    --type 'FeatureTable[Frequency]' \
-    --input-path feature-table.biom \
-    --output-path feature-table.qza
-
-# Import representative sequences
-qiime tools import \
-    --type 'FeatureData[Sequence]' \
-    --input-path savont-out/final_asvs.fasta \
-    --output-path rep-seqs.qza
-```
-
-`feature-table.qza` and `rep-seqs.qza` are the standard inputs for QIIME2 diversity, taxonomy, and differential abundance plugins.
 
 ## Taxonomic profiling against a reference database
 
 Savont can also classify ASVs and generate a taxonomic profile with abundances. Savont supports two classification approaches:
 
-- **`savont classify`** — minimap2 alignment against database with species- and genus-level output (better for species level)
+- **`savont classify`** — minimap2 alignment against database with species- and genus-level output (better for species level). Uses identity thresholds for taxonomic assignment (thresholds from [Yarza et al.](https://www.nature.com/articles/nrmicro3330))
 - **`savont sintax`** — SINTAX k-mer bootstrap; genus-level only (better for unknown taxa)
 
 ### Step 2: Download a reference database
@@ -148,30 +150,6 @@ savont sintax -i savont-out -d databases/emu-1 -t 20
 savont sintax -i savont-out -d databases/silva-138.2 --min-bootstrap 0.70
 ```
 
-## Database Information
-
-### EMU (`emu-1`)
-
-From [Emu](https://github.com/treangenlab/emu) by Curry et al. (2022, Nature Methods). Curated 16S rRNA database with focused species-level classifications.
-
-### SILVA (`silva-138.2`) — SSU Ref NR99 v138.2
-
-More comprehensive than EMU, especially for understudied taxa. Species-level classifications are often split across multiple distinct strains.
-
-### GreenGenes2 (`greengenes2-2024.09`)
-
-GreenGenes2 2024.09 species-level trainset (DADA2 format). Unannotated ranks are reported as `Greengenes_unannotated`.
-
-## Output
-
-### ASV Clustering Output
-
-The `savont asv` command produces:
-
-1. **final_asvs.fasta** - Final ASV sequences (high-quality, chimera-filtered)
-2. **feature-table.tsv** - QIIME2-compatible feature table (ASV × sample read counts)
-3. **final_clusters.tsv** - Cluster assignments mapping reads to ASVs
-4. **temp/** - Directory containing intermediate files
 
 ### Classification Output (`savont classify`)
 
@@ -196,24 +174,90 @@ abundance       species         genus   family  order   class   phylum  clade   
 Individual ASV mapping details:
 
 ```
-asv_header      depth     alignment_identity      number_mismatches       tax_id  species genus   reference
-final_consensus_0_depth_5936    5936    99.67   5       29466   Veillonella parvula     Veillonella     29466:emu_db:36875
-final_consensus_1_depth_3081    3081    99.27   11      29466   Veillonella parvula     Veillonella     29466:emu_db:36873
-final_consensus_2_depth_2927    2927    99.40   9       29466   Veillonella parvula     Veillonella     29466:emu_db:36869
+asv_header      depth   alignment_identity  number_mismatches   tax_id  species             genus       family              order               class                   phylum          clade   superkingdom    reference
+final_consensus_0_depth_5936    5936    99.67   5   29466   Veillonella parvula Veillonella Veillonellaceae Veillonellales  Negativicutes   Bacillota           Bacteria    29466:emu_db:36875
+final_consensus_1_depth_3081    3081    99.27   11  29466   Veillonella parvula Veillonella Veillonellaceae Veillonellales  Negativicutes   Bacillota           Bacteria    29466:emu_db:36873
 ```
 
-The best mapping references and their corresponding species/genus are denoted.
+All taxonomic ranks from species to superkingdom are included. Unclassified ASVs have `UNCLASSIFIED` in every rank column.
 
 ### Classification Output (`savont sintax`)
 
 `savont sintax` produces **genus_abundance.tsv** (same format as above) and **asv_mappings.tsv** with bootstrap confidence scores:
 
 ```
-asv_header      depth   genus_bootstrap family_bootstrap  genus         family            order   ...
-final_consensus_0_depth_5936    5936    0.980   0.990   Veillonella   Veillonellaceae   ...
+asv_header      depth   species_bootstrap   genus_bootstrap family_bootstrap    order_bootstrap class_bootstrap phylum_bootstrap    superkingdom_bootstrap  species         genus       family          ...
+final_consensus_0_depth_5936    5936    0.000   0.980   0.990   0.995   0.999   1.000   1.000   UNCLASSIFIED    Veillonella Veillonellaceae  ...
 ```
 
 Ranks below `--min-bootstrap` are reported as `UNCLASSIFIED`.
+
+
+## Merge multiple samples (`savont merge`)
+
+When you have run `savont asv` (and optionally `classify`/`sintax`) on multiple samples separately, `savont merge` combines them into a single set of outputs. 
+
+ASVs across samples are matched by exact sequence hash. By default, savont also **fuzzy-merges** ASVs with identical sequences but trimmed to slightly different lengths across runs. 
+
+```sh
+# Merge two samples
+savont merge -i sample1-out sample2-out -o merged-out
+
+# Merge many samples and give them meaningful names
+savont merge \
+    -i run1/savont-out run2/savont-out run3/savont-out \
+    -o merged-out \
+    --relabel SampleA SampleB SampleC
+```
+
+> [!NOTE]
+> `--relabel` labels are applied in the same order as `--input-dirs`. Savont will warn loudly if duplicate sample names are detected.
+
+#### Merge outputs
+
+1. **merged_feature_table.tsv** — QIIME2-compatible feature table; rows are hash-keyed ASVs, columns are samples
+2. **merged_rep_seqs.fasta** — representative sequences for all merged ASVs
+3. **merged_asv_taxonomy.tsv** — ASV-level taxonomy (Feature ID → lineage); **only written if `savont classify` or `savont sintax` was run on any input directory**
+4. **merged_taxon_counts.tsv** — human-readable taxon count table; rows are lineage strings (`Bacteria;Firmicutes;...`), columns are sample counts; useful for quick inspection without QIIME2
+
+#### Importing merged outputs into QIIME2 + stacked bar plot
+
+```sh
+# Feature table
+biom convert -i merged-out/merged_feature_table.tsv \
+    -o feature-table.biom --table-type='OTU table' --to-hdf5
+qiime tools import --type 'FeatureTable[Frequency]' \
+    --input-path feature-table.biom --output-path feature-table.qza
+
+# Representative sequences
+qiime tools import --type 'FeatureData[Sequence]' \
+    --input-path merged-out/merged_rep_seqs.fasta --output-path rep-seqs.qza
+
+# Taxonomy (if classify/sintax was run)
+qiime tools import --type 'FeatureData[Taxonomy]' \
+    --input-format HeaderlessTSVTaxonomyFormat \
+    --input-path merged-out/merged_asv_taxonomy.tsv --output-path taxonomy.qza
+
+qiime taxa barplot --i-table feature-table.qza --i-taxonomy taxonomy.qza \
+    --o-visualization taxa-bar-plots.qzv
+```
+
+
+
+## Database Information
+
+### EMU (`emu-1`)
+
+From [Emu](https://github.com/treangenlab/emu) by Curry et al. (2022, Nature Methods). Curated 16S rRNA database with focused species-level classifications. Less breadth than SILVA or Greengenes2 for complex microbiomes. 
+
+### SILVA (`silva-138.2`) — SSU Ref NR99 v138.2
+
+More comprehensive than EMU, especially for understudied taxa. However, species-level classifications are often split across multiple distinct strains.
+
+### GreenGenes2 (`greengenes2-2024.09`)
+
+GreenGenes2 2024.09 species-level trainset (DADA2 format). Unannotated ranks are reported as `Greengenes_unannotated`.
+
 
 ## Algorithm Overview
 

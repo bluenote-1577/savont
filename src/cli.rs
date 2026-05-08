@@ -15,7 +15,7 @@ pub struct Cli {
     pub command: Commands,
 
     /// Logging verbosity level
-    #[arg(short, long, value_enum, default_value = "debug", global = true)]
+    #[arg(short, long, value_enum, default_value = "info", global = true)]
     pub log_level: LogLevel,
 }
 
@@ -36,6 +36,10 @@ pub enum Commands {
     /// K-mer bootstrap against a database for genus-level classification with the SINTAX algorithm
     #[command(name = "sintax")]
     Sintax(SintaxArgs),
+
+    /// Merge ASV profiles and taxonomic tables from multiple savont output directories
+    #[command(name = "merge")]
+    Merge(MergeArgs),
 }
 
 #[derive(Parser, Debug, Clone)]
@@ -60,7 +64,7 @@ pub struct ClusterArgs {
     #[arg(long, default_value_t = false, help_heading = CLI_HEADINGS[5])]
     pub fl_16s: bool,
 
-    /// PacBio HiFi amplicon preset (--min-cluster-size 6)
+    /// PacBio HiFi amplicon preset (--min-cluster-size 4)
     #[arg(long, default_value_t = false, help_heading = CLI_HEADINGS[5])]
     pub hifi: bool,
 
@@ -145,7 +149,7 @@ pub struct ClusterArgs {
     #[arg(long, default_value_t = false, help_heading = CLI_HEADINGS[1], hide = true)]
     pub use_blockmers: bool,
 
-    /// Allowable errors for bi-chimeric detection (higher = more sensitive, slower)
+    /// Allowable errors for bi-chimeric detection (higher = more sensitive but may filter out true ASVs)
     #[arg(long, default_value_t=1, help_heading = CLI_HEADINGS[3])]
     pub chimera_allowable_errors: usize,
 
@@ -199,7 +203,7 @@ pub struct ClassifyArgs {
 #[derive(Parser, Debug, Clone)]
 pub struct DownloadArgs {
     /// Directory under which each database will be saved as a subdirectory
-    #[arg(short, long, required = true)]
+    #[arg(long, required = true)]
     pub location: String,
 
     /// One or more databases to download.
@@ -243,6 +247,27 @@ pub struct SintaxArgs {
     /// Explicitly output "UNCLASSIFIED-(asv_header)" for unassigned ranks in species/genus columns instead of using "UNCLASSIFIED"
     #[arg(long, default_value_t = false)]
     pub detailed_unclassified: bool,
+}
+
+#[derive(Parser, Debug, Clone)]
+pub struct MergeArgs {
+    /// Input directories containing savont asv (and optionally classify/sintax) output.
+    /// Each directory must contain final_asvs.fasta.
+    #[arg(short, long, required = true, num_args = 1..)]
+    pub input_dirs: Vec<String>,
+
+    /// Output directory for merged results
+    #[arg(short, long, required = true)]
+    pub output_dir: String,
+
+    /// ASVs that are 10 bp shorter or longer than another ASV but 100% identical to it are merged by default. Disable this behavior to keep all ASVs separate (not recommended).
+    #[arg(long, default_value_t = false)]
+    pub no_fuzzy: bool,
+
+    /// Override auto-detected sample names (must supply exactly one label per --input-dirs entry).
+    /// Useful when the read filename embedded in the feature table is ambiguous.
+    #[arg(long, num_args = 1.., value_name = "LABEL")]
+    pub relabel: Option<Vec<String>>,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, ValueEnum)]

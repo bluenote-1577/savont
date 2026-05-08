@@ -7,6 +7,7 @@ use savont::constants::*;
 use savont::kmer_comp;
 use savont::classify;
 use savont::sintax;
+use savont::merge;
 use savont::seeding;
 use savont::seq_parse;
 use savont::types;
@@ -38,6 +39,9 @@ fn main() {
         }
         cli::Commands::Sintax(sintax_args) => {
             run_sintax(sintax_args, &args);
+        }
+        cli::Commands::Merge(merge_args) => {
+            run_merge(merge_args, &args);
         }
     }
 }
@@ -196,7 +200,6 @@ fn run_sintax(args: &cli::SintaxArgs, cli_args: &cli::Cli) {
         .duplicate_to_stderr(Duplicate::Info)
         .format(my_own_format_colored)
         .format_for_files(my_own_format)
-        .create_symlink("savont_sintax_latest.log")
         .start()
         .expect("Something went wrong with creating log file");
 
@@ -217,6 +220,30 @@ fn run_sintax(args: &cli::SintaxArgs, cli_args: &cli::Cli) {
     });
 
     sintax::sintax(args, &db);
+}
+
+fn run_merge(args: &cli::MergeArgs, cli_args: &cli::Cli) {
+    let output_dir = Path::new(&args.output_dir);
+    if !output_dir.exists() {
+        std::fs::create_dir_all(output_dir).expect("Could not create output directory");
+    }
+
+    let log_spec = format!("{}", cli_args.log_level_filter().to_string());
+    let filespec = FileSpec::default().directory(output_dir).basename("savont_merge");
+    let _logger_handle = flexi_logger::Logger::try_with_str(log_spec)
+        .expect("Something went wrong with logging")
+        .log_to_file(filespec)
+        .duplicate_to_stderr(Duplicate::Info)
+        .format(my_own_format_colored)
+        .format_for_files(my_own_format)
+        .start()
+        .expect("Something went wrong with creating log file");
+
+    let command_args: Vec<String> = std::env::args().collect();
+    log::info!("COMMAND: {}", command_args.join(" "));
+    log::info!("VERSION: {}", env!("CARGO_PKG_VERSION"));
+
+    merge::merge(args);
 }
 
 fn run_download(args: &cli::DownloadArgs, cli_args: &cli::Cli) {
@@ -265,7 +292,6 @@ fn initialize_setup_classify(args: &cli::ClassifyArgs, cli_args: &cli::Cli) -> P
         .duplicate_to_stderr(Duplicate::Info)
         .format(my_own_format_colored)
         .format_for_files(my_own_format)
-        .create_symlink("savont_classify_latest.log")
         .start()
         .expect("Something went wrong with creating log file");
 
@@ -379,7 +405,6 @@ fn initialize_setup_cluster(args: &mut cli::ClusterArgs, cli_args: &cli::Cli) ->
         .duplicate_to_stderr(Duplicate::Info) // print warnings and errors also to the console
         .format(my_own_format_colored) // use a simple colored format
         .format_for_files(my_own_format)
-        .create_symlink("savont_latest.log")
         .start()
         .expect("Something went wrong with creating log file");
 
@@ -406,7 +431,7 @@ fn initialize_setup_cluster(args: &mut cli::ClusterArgs, cli_args: &cli::Cli) ->
 
     if args.hifi{
         log::info!("=== PRESET: Using PacBio HiFi preset. Adjusting parameters... ===");
-        args.min_cluster_size = 6;
+        args.min_cluster_size = 4;
     }
 
     // Initialize thread pool, bigger stack size because sorting k-mers fails otherwise...

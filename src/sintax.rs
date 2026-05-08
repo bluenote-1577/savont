@@ -82,12 +82,12 @@ pub struct SintaxHit {
 fn hit_to_classification(
     hit: &SintaxHit,
     min_bootstrap: f64,
-    simple_unclassified: bool,
+    detailed_unclassified: bool,
 ) -> taxonomy::AsvClassification {
-    let unclassified = if simple_unclassified {
-        "UNCLASSIFIED".to_string()
-    } else {
+    let unclassified = if detailed_unclassified {
         format!("UNCLASSIFIED-({})", hit.asv_header)
+    } else {
+        "UNCLASSIFIED".to_string()
     };
 
     let apply = |boot: f64, name: &str| -> String {
@@ -123,29 +123,43 @@ fn hit_to_classification(
 
 fn write_sintax_asv_mappings(
     hits: &[Option<SintaxHit>],
+    min_bootstrap: f64,
     path: &Path,
 ) -> std::io::Result<()> {
     use std::io::Write;
     let mut file = std::fs::File::create(path)?;
     writeln!(
         file,
-        "asv_header\tdepth\tgenus_bootstrap\tfamily_bootstrap\t\
-         genus\tfamily\torder\tclass\tphylum\tsuperkingdom"
+        "asv_header\tdepth\t\
+         species_bootstrap\tgenus_bootstrap\tfamily_bootstrap\t\
+         order_bootstrap\tclass_bootstrap\tphylum_bootstrap\tsuperkingdom_bootstrap\t\
+         species\tgenus\tfamily\torder\tclass\tphylum\tsuperkingdom"
     )?;
+    let unc = "UNCLASSIFIED";
+    let apply = |boot: f64, name: &str| -> String {
+        if boot >= min_bootstrap { name.to_string() } else { unc.to_string() }
+    };
     for hit in hits.iter().flatten() {
         writeln!(
             file,
-            "{}\t{}\t{:.3}\t{:.3}\t{}\t{}\t{}\t{}\t{}\t{}",
+            "{}\t{}\t{:.3}\t{:.3}\t{:.3}\t{:.3}\t{:.3}\t{:.3}\t{:.3}\t\
+             {}\t{}\t{}\t{}\t{}\t{}\t{}",
             hit.asv_header,
             hit.depth,
+            hit.species_boot,
             hit.genus_boot,
             hit.family_boot,
-            hit.genus,
-            hit.family,
-            hit.order,
-            hit.class,
-            hit.phylum,
-            hit.superkingdom,
+            hit.order_boot,
+            hit.class_boot,
+            hit.phylum_boot,
+            hit.superkingdom_boot,
+            unc,                                      // species: sintax is genus-level max
+            apply(hit.genus_boot,        &hit.genus),
+            apply(hit.family_boot,       &hit.family),
+            apply(hit.order_boot,        &hit.order),
+            apply(hit.class_boot,        &hit.class),
+            apply(hit.phylum_boot,       &hit.phylum),
+            apply(hit.superkingdom_boot, &hit.superkingdom),
         )?;
     }
     Ok(())
@@ -207,6 +221,7 @@ pub fn sintax(args: &cli::SintaxArgs, db: &taxonomy::Database) {
 
     let best_scores:   Vec<Mutex<u16>> = (0..n_pairs).map(|_| Mutex::new(0u16)).collect();
     let best_taxonomy: Vec<Mutex<Option<taxonomy::TaxonomyEntry>>> = (0..n_pairs).map(|_| Mutex::new(None)).collect();
+    let counter = Mutex::new(0usize);
 
     let db_seqs = taxonomy::load_fasta_with_needletail(&db.fasta_path)
         .expect("Failed to load database FASTA for SINTAX");
@@ -248,6 +263,12 @@ pub fn sintax(args: &cli::SintaxArgs, db: &taxonomy::Database) {
                 *best_score = ref_hit_counts[idx];
                 *best_entry = Some(entry.clone());
             }
+        }
+
+        let mut count = counter.lock().unwrap();
+        *count += 1;
+        if *count % 1000 == 0 {
+            log::info!("Processed {} / {} reference sequences...", *count, db_seqs.len());
         }
     });
 
@@ -382,7 +403,7 @@ pub fn sintax(args: &cli::SintaxArgs, db: &taxonomy::Database) {
         .expect("Failed to write genus_abundance.tsv");
     log::info!("Wrote genus_abundance.tsv");
 
-    write_sintax_asv_mappings(&all_hits, &output_dir.join("asv_mappings.tsv"))
+    write_sintax_asv_mappings(&all_hits, args.min_bootstrap, &output_dir.join("asv_mappings.tsv"))
         .expect("Failed to write asv_mappings.tsv");
     log::info!("Wrote asv_mappings.tsv");
 

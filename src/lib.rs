@@ -15,6 +15,7 @@ pub mod taxonomy;
 pub mod databases;
 pub mod classify;
 pub mod sintax;
+pub mod merge;
 pub mod download;
 
 //pub mod cbloom;

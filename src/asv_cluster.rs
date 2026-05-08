@@ -220,7 +220,7 @@ pub fn cluster_reads_by_kmers(
     clusters.retain(|cluster| cluster.len() >= args.min_cluster_size);
 
     // Write clusters to file
-    let cluster_file = output_dir.join("kmer_clusters.tsv");
+    let cluster_file = output_dir.join("kmer_clusters_stage2.tsv");
     let mut writer = std::io::BufWriter::new(std::fs::File::create(&cluster_file).unwrap());
 
     writeln!(writer, "cluster_id\tsize\trepresentative\tmembers").unwrap();
@@ -767,7 +767,7 @@ pub fn cluster_reads_by_snpmers(
         .unwrap();
 
     // Write SNPmer clusters to TSV file
-    let cluster_file = output_dir.join("snpmer_clusters.tsv");
+    let cluster_file = output_dir.join("snpmer_clusters_before_reclust2.5.tsv");
     let mut writer = std::io::BufWriter::new(std::fs::File::create(&cluster_file).unwrap());
     writeln!(writer, "kmer_cluster_id\tsnpmer_cluster_id\tsize\trepresentative\tmembers").unwrap();
 
@@ -821,7 +821,7 @@ pub fn cluster_reads_by_snpmers(
         kmer_clusters.len()
     );
 
-    let final_file = output_dir.join("final_clusters.tsv");
+    let final_file = output_dir.join("final_snpmer_clusters_stage3.tsv");
     let mut writer = std::io::BufWriter::new(std::fs::File::create(&final_file).unwrap());
 
     for (snpmer_rep_id, cluster) in local_clusters_all.iter().enumerate() {

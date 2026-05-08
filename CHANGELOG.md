@@ -2,6 +2,14 @@
 
 All notable changes to savont will be documented in this file.
 
+## [0.5.0] - 2026-05-11
+
+### Changed
+
+- **`savont merge`** command added. Allows merging of multiple savont runs with outputs that are easily useable by QIIME. Merges ASVs across multiple samples with a simple fuzzy clustering algorithm. 
+- **Fixed ASV sequence boundary issues**: ASV ends were getting cut off during consensus generation. This is now fixed -- ASV boundaries should be more consistent across samples.
+- **Fixed `savont classify` thresholds**: Using taxonomic thresholds for sequence identity for `savont classify` from Yarza et al. by default. 
+
 ## [0.4.0] - 2026-04-28
 
 ### Changed

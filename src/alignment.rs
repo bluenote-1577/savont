@@ -201,7 +201,7 @@ fn generate_consensus_poa(
     }
 
     // SPOA implementation
-    let mut engine = spoa_rs::AlignmentEngine::new_affine(spoa_rs::AlignmentType::kSW, 3, -8, -6, -6);
+    let mut engine = spoa_rs::AlignmentEngine::new_affine(spoa_rs::AlignmentType::kOV, 3, -8, -6, -6);
     let mut graph = spoa_rs::Graph::new();
 
 
@@ -272,193 +272,12 @@ pub fn align_and_consensus(twin_reads: &[TwinRead], clusters: Vec<Vec<usize>>, a
         lengths_and_i.sort_by_key(|k| k.0);
 
         // Check if we should use hierarchical consensus (for large clusters)
-        let use_hierarchical = cluster.len() > 100 && false;
         // Rank all sequences by quality-weighted identity to this seed
         let mut avg_qual_and_i: Vec<(_,_)> = avg_quals.iter().enumerate()
             .map(|(i, avg)| (*avg, i))
             .collect();
         avg_qual_and_i.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
 
-
-        if use_hierarchical {
-            // Hierarchical consensus: generate 5 sub-consensuses, then consensus of those
-            let percentiles = vec![0.90, 0.875, 0.85, 0.825, 0.80];
-            let seqs_per_group = 20;
-            let mut sub_consensuses = Vec::new();
-
-            for (group_idx, &percentile) in percentiles.iter().enumerate() {
-                // Get seed sequence at this percentile
-                let seed_index = lengths_and_i[(lengths_and_i.len() as f64 * percentile) as usize].1;
-                
-                // Take sequences from the appropriate range: group 0 -> 0-19, group 1 -> 20-39, etc.
-                let start_idx = group_idx * seqs_per_group;
-                let end_idx = (start_idx + seqs_per_group).min(avg_qual_and_i.len());
-
-                if start_idx >= avg_qual_and_i.len() {
-                    break; // Not enough sequences for this group
-                }
-
-                let range = avg_qual_and_i[start_idx..end_idx].iter().map(|(_, i)| *i);
-
-                // Align sequences to this seed
-                let aligner = Aligner::builder()
-                    .map_ont()
-                    .with_index_threads(args.threads)
-                    .with_cigar()
-                    .with_seq(&sequences[seed_index])
-                    .expect("Failed to create aligner");
-
-                let mut aligned_sequences = Vec::new();
-                let mut aligned_qualities = Vec::new();
-
-                // Add seed first
-                aligned_sequences.push(sequences[seed_index].clone());
-                aligned_qualities.push(qualities[seed_index].clone());
-
-                for i in range {
-                    if i == seed_index {
-                        continue;
-                    }
-                    let seq = &sequences[i];
-                    let alignment = aligner.map(seq, true, false, None, None, None);
-                    if alignment.is_err() {
-                        continue;
-                    }
-
-                    let mappings = alignment.unwrap();
-                    if mappings.is_empty() {
-                        continue;
-                    }
-
-                    let best_mapping = mappings.first().unwrap();
-                    let final_seq;
-                    let final_qual;
-                    let qstart;
-                    let qend;
-
-                    if best_mapping.strand == minimap2::Strand::Reverse {
-                        qstart = sequences[i].len() as i32 - best_mapping.query_end;
-                        qend = sequences[i].len() as i32 - best_mapping.query_start;
-                        final_seq = utils::reverse_complement(&sequences[i]);
-                        final_qual = qualities[i].iter().rev().cloned().collect();
-                    } else {
-                        qstart = best_mapping.query_start;
-                        qend = best_mapping.query_end;
-                        final_seq = sequences[i].clone();
-                        final_qual = qualities[i].clone();
-                    }
-
-                    let mapped_seq = final_seq[qstart as usize..qend as usize].to_vec();
-                    let mapped_qual = final_qual[qstart as usize..qend as usize].to_vec();
-
-                    aligned_sequences.push(mapped_seq);
-                    aligned_qualities.push(mapped_qual);
-                }
-
-                // Generate sub-consensus with HPC
-                let mut hpc_aligned_sequences = Vec::new();
-                let mut hpc_aligned_qualities = Vec::new();
-                for i in 0..aligned_sequences.len() {
-                    let (hpc_seq, hpc_qual, _hp_lens) = utils::homopolymer_compress_with_quality(
-                        &aligned_sequences[i],
-                        &aligned_qualities[i],
-                        args.use_hpc,
-                    );
-                    hpc_aligned_sequences.push(hpc_seq);
-                    hpc_aligned_qualities.push(hpc_qual);
-                }
-
-                let coverage_threshold = (aligned_sequences.len() / 10).max(2) as i32;
-                let sub_consensus = generate_consensus_poa(&hpc_aligned_sequences, &hpc_aligned_qualities, coverage_threshold, cluster_idx);
-
-                sub_consensuses.push(sub_consensus);
-            }
-
-            // Now generate final consensus from the sub-consensuses
-            let final_seed_idx = 0; // Use first sub-consensus as seed
-            let final_aligner = Aligner::builder()
-                .map_ont()
-                .with_index_threads(args.threads)
-                .with_cigar()
-                .with_seq(&sub_consensuses[final_seed_idx])
-                .expect("Failed to create aligner");
-
-            let mut final_aligned_sequences = Vec::new();
-            let mut final_aligned_qualities = Vec::new();
-
-            // Add seed sub-consensus
-            final_aligned_sequences.push(sub_consensuses[final_seed_idx].clone());
-            final_aligned_qualities.push(vec![40; sub_consensuses[final_seed_idx].len()]); // High quality
-
-            for (i, sub_cons) in sub_consensuses.iter().enumerate() {
-                if i == final_seed_idx {
-                    continue;
-                }
-
-                let alignment = final_aligner.map(sub_cons, true, false, None, None, None);
-                if alignment.is_err() {
-                    continue;
-                }
-
-                let mappings = alignment.unwrap();
-                if mappings.is_empty() {
-                    continue;
-                }
-
-                let best_mapping = mappings.first().unwrap();
-                let final_seq;
-                let qstart;
-                let qend;
-
-                if best_mapping.strand == minimap2::Strand::Reverse {
-                    qstart = sub_cons.len() as i32 - best_mapping.query_end;
-                    qend = sub_cons.len() as i32 - best_mapping.query_start;
-                    final_seq = utils::reverse_complement(sub_cons);
-                } else {
-                    qstart = best_mapping.query_start;
-                    qend = best_mapping.query_end;
-                    final_seq = sub_cons.clone();
-                }
-
-                let mapped_seq = final_seq[qstart as usize..qend as usize].to_vec();
-                let mapped_qual = vec![40; mapped_seq.len()];
-
-                final_aligned_sequences.push(mapped_seq);
-                final_aligned_qualities.push(mapped_qual);
-            }
-
-            // HPC compress final aligned sequences
-            let mut hpc_final_sequences = Vec::new();
-            let mut hpc_final_qualities = Vec::new();
-            for i in 0..final_aligned_sequences.len() {
-                let (hpc_seq, hpc_qual, _hp_lens) = utils::homopolymer_compress_with_quality(
-                    &final_aligned_sequences[i],
-                    &final_aligned_qualities[i],
-                    args.use_hpc,
-                );
-                hpc_final_sequences.push(hpc_seq);
-                hpc_final_qualities.push(hpc_qual);
-            }
-
-            let final_coverage_threshold = (final_aligned_sequences.len() / 2).max(1) as i32;
-            let hpc_consensus = generate_consensus_poa(&hpc_final_sequences, &hpc_final_qualities, final_coverage_threshold, cluster_idx);
-
-            // Compress the consensus again to ensure it's fully HPC
-            let (hpc_consensus_seq, _) = utils::homopolymer_compress(&hpc_consensus, args.use_hpc);
-
-            let buffer = 20;
-            if hpc_consensus_seq.len() < 2 * buffer {
-                log::warn!("HPC consensus sequence for cluster {} is too short (length {}). Skipping trimming.", cluster_idx, hpc_consensus_seq.len());
-                return;
-            }
-
-            let depth = cluster.len();
-            let placeholder_hp_lengths = vec![1u8; hpc_consensus_seq.len()];
-            consensus_seqs.lock().unwrap().push((cluster_idx, hpc_consensus_seq.clone(), placeholder_hp_lengths, depth, cluster.clone()));
-
-            log::trace!("Completed hierarchical consensus for cluster of size {}", cluster.len());
-            return;
-        }
 
         // Standard consensus for smaller clusters (<= 100 sequences)
         let mut avg_qual_and_i: Vec<(_,_)> = avg_quals.iter().enumerate().map(|(i, avg)| (*avg, i)).collect();
@@ -511,23 +330,25 @@ pub fn align_and_consensus(twin_reads: &[TwinRead], clusters: Vec<Vec<usize>>, a
 
             let final_seq;
             let final_qual;
-            let qstart;
-            let qend;
+            let _qstart;
+            let _qend;
             if best_mapping.strand == minimap2::Strand::Reverse {
-                qstart = sequences[i].len() as i32 - best_mapping.query_end;
-                qend = sequences[i].len() as i32 - best_mapping.query_start;
+                _qstart = sequences[i].len() as i32 - best_mapping.query_end;
+                _qend = sequences[i].len() as i32 - best_mapping.query_start;
                 final_seq = utils::reverse_complement(&sequences[i]);
                 final_qual = qualities[i].iter().rev().cloned().collect();
             }
             else{
-                qstart = best_mapping.query_start;
-                qend = best_mapping.query_end;
+                _qstart = best_mapping.query_start;
+                _qend = best_mapping.query_end;
                 final_seq = sequences[i].clone();
                 final_qual = qualities[i].clone();
             }
 
-            let mapped_seq = final_seq[qstart as usize..qend as usize].to_vec();
-            let mapped_qual = final_qual[qstart as usize..qend as usize].to_vec();
+            //let mapped_seq = final_seq[qstart as usize..qend as usize].to_vec();
+            //let mapped_qual = final_qual[qstart as usize..qend as usize].to_vec();
+            let mapped_seq = final_seq;
+            let mapped_qual = final_qual;
 
             aligned_sequences.push(mapped_seq);
             aligned_qualities.push(mapped_qual);
@@ -981,7 +802,7 @@ pub fn write_clusters_tsv(
 ) -> std::io::Result<()> {
     let mut writer = std::io::BufWriter::new(std::fs::File::create(output_path)?);
 
-    for (cluster_id, consensus) in consensuses.iter().enumerate() {
+    for (_, consensus) in consensuses.iter().enumerate() {
         let cluster = &consensus.cluster;
         if cluster.is_empty() {
             continue;
@@ -992,7 +813,7 @@ pub fn write_clusters_tsv(
             writer,
             "{}_cluster_{}\tsize_{}\trepresentative_{}\tmembers\n{}",
             prefix,
-            cluster_id,
+            consensus.id,
             cluster.len(),
             representative,
             cluster.iter().map(|x| format!("{} {}", &twin_reads[*x].id, &twin_reads[*x].est_id.unwrap_or(100.))).collect::<Vec<_>>().join("\n")
@@ -1042,7 +863,7 @@ pub fn analyze_pileup_consensuses(
     temp_dir: &PathBuf,
 ) -> Vec<ConsensusSequence> {
     let bad_length_threshold = 100;
-    let min_coverage_abs = args.min_cluster_size;
+    let min_coverage_abs = (args.min_cluster_size * 3 / 4).max(2) as usize;
     let deletion_insertion_quality = 48u8; // Fixed quality for indels
 
     // Get error rate for deletions/insertions
@@ -1073,18 +894,27 @@ pub fn analyze_pileup_consensuses(
         let mut end_idx = cluster_pileup.len();
 
         // Find first position with sufficient coverage
+        let mut trimmed_depths = vec![];
         for (i, pileup) in cluster_pileup.iter().enumerate() {
             if pileup.depth() >= min_coverage {
+                trimmed_depths.push(pileup.depth());
                 start_idx = i;
                 break;
+            }
+            else{
+                trimmed_depths.push(pileup.depth());
             }
         }
 
         // Find last position with sufficient coverage
         for (i, pileup) in cluster_pileup.iter().enumerate().rev() {
             if pileup.depth() >= min_coverage {
+                trimmed_depths.push(pileup.depth());
                 end_idx = i + 1;
                 break;
+            }
+            else{
+                trimmed_depths.push(pileup.depth());
             }
         }
 
@@ -1093,8 +923,8 @@ pub fn analyze_pileup_consensuses(
             continue;
         }
 
-        log::trace!("Consensus {}: Trimming from {}-{} to {}-{} with min depth {}",
-            cluster_idx, 0, cluster_pileup.len(), start_idx, end_idx, min_coverage);
+        log::debug!("Consensus {}: Trimming from {}-{} to {}-{} with min depth {}. Trimmed depths at ends: {:?}",
+            cluster_idx, 0, cluster_pileup.len(), start_idx, end_idx, min_coverage, trimmed_depths);
 
 
         // Update pileup to trimmed version
@@ -1253,7 +1083,7 @@ pub fn analyze_pileup_consensuses(
             continue;
         }
         let left_start = pileups[i].first().map(|p| p.ref_pos).unwrap();
-        let right_end = pileups[i].last().map(|p| p.ref_pos).unwrap();
+        let right_end = pileups[i].last().map(|p| p.ref_pos).unwrap() + 1; // +1 because ref_pos is 0-based and end index is exclusive
 
         let start_polish = bad_length_threshold + left_start;
         let end_polish = right_end - bad_length_threshold;
@@ -1265,13 +1095,13 @@ pub fn analyze_pileup_consensuses(
 
         let consensus = &mut consensuses[i];
         if low_conf_region_left > 0 {
-            log::trace!("Consensus {}: Masking low-confidence region at start up to position {}", i, low_conf_region_left);
-            for pos in 0..=low_conf_region_left {
+            log::debug!("Consensus {}: Masking low-confidence region at start up to position {}", i, low_conf_region_left);
+            for pos in 0..low_conf_region_left {
                 consensus.sequence[pos] = b'N';
             }
         }
         if low_conf_region_right < consensus.sequence.len() {
-            log::trace!("Consensus {}: Masking low-confidence region at end from position {} to {}", i, low_conf_region_right, consensus.sequence.len());
+            log::debug!("Consensus {}: Masking low-confidence region at end from position {} to {}", i, low_conf_region_right, consensus.sequence.len());
             for pos in low_conf_region_right..consensus.sequence.len() {
                 consensus.sequence[pos] = b'N';
             }
@@ -1290,15 +1120,21 @@ pub fn analyze_pileup_consensuses(
         }
     }
 
-    // Write clusters before filtering out low quality consensuses
-    let prefilter_file = temp_dir.join("clusters_before_quality_filter.tsv");
-    write_clusters_tsv(consensuses, twin_reads, &prefilter_file, "prefilter")
-        .expect("Failed to write clusters_before_quality_filter.tsv");
-    log::info!("Wrote cluster information before filtering to clusters_before_quality_filter.tsv");
-
+    
     let low_quality_consensuses = consensuses.iter().filter(|c| lq_criteria(c, args)).map(|c| c.clone()).collect::<Vec<_>>();
     log::info!("Low quality consensus sequences: {:?}", &low_quality_consensuses.iter().map(|c| c.id).collect::<Vec<_>>());
+    let low_quality_cluster_file = temp_dir.join("low_quality_clusters.tsv");
+    write_clusters_tsv(&low_quality_consensuses, twin_reads, &low_quality_cluster_file, "low_quality")
+        .expect("Failed to write low_quality_clusters.tsv");
+    log::info!("Wrote low quality cluster information to low_quality_clusters.tsv");
     consensuses.retain(|c| !lq_criteria(c, args));
+
+    // Write clusters before filtering out low quality consensuses
+    let postfilter_file = temp_dir.join("clusters_after_quality_filter_stage4.tsv");
+    write_clusters_tsv(consensuses, twin_reads, &postfilter_file, "prefilter")
+        .expect("Failed to write clusters_after_quality_filter_stage4.tsv");
+    log::info!("Wrote cluster information before filtering to clusters_after_quality_filter_stage4.tsv");
+
 
     log::info!("Polishing complete");
 
@@ -1622,12 +1458,12 @@ pub fn merge_similar_consensuses(
 
     // Perform the merges
     for (&query_idx, &target_idx) in &merged_into {
-        log::trace!(
+        log::debug!(
             "Merging consensus {} (depth {}) into consensus {} (depth {})",
             consensuses[query_idx].id,
             consensuses[query_idx].depth,
             consensuses[target_idx].id,
-            consensuses[target_idx].depth
+            consensuses[target_idx].depth,
         );
 
         // Move all reads from query cluster to target cluster
@@ -1658,9 +1494,9 @@ pub fn merge_similar_consensuses(
     new_consensuses.sort_by(|a, b| b.depth.cmp(&a.depth)); // Sort by depth descending
 
 
-    let final_file = temp_dir.join("final_clusters_merged.tsv");
+    let final_file = temp_dir.join("final_clusters_merged_stage5.tsv");
     write_clusters_tsv(&new_consensuses, twin_reads, &final_file, "final")
-        .expect("Failed to write final_clusters_merged.tsv");
+        .expect("Failed to write final_clusters_merged_stage5.tsv");
 
     // Write merged consensus sequences (before chimera filtering)
     let merged_fasta = temp_dir.join("merged_consensus_sequences.fasta");

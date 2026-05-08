@@ -181,7 +181,7 @@ pub fn detect_chimeras(
                         let total_match = left_len + right_len;
                         let coverage_fraction = total_match as f64 / query_len as f64;
 
-                        if coverage_fraction >= (0.9 * parent_similarity).min(0.8) 
+                        if coverage_fraction >= (0.9 * parent_similarity.max(0.7)).min(0.8) 
                         && (coverage_fraction < 1.5 || (parent_similarity < 0.99 && coverage_fraction < 1.8)) {
                             log::debug!(
                                 "Detected chimera: consensus {} (depth {}) = left_parent {} + right_parent {} (coverage: {:.2}%, parent similarity: {:.2}%)",
@@ -430,7 +430,7 @@ fn calculate_pairwise_similarities(
 
             // Only calculate similarity for pairs that have sufficient depth difference 
             // (to save time, and because similar-depth consensuses are unlikely to be chimeras of each other)
-            if depth_i < depth_j * 5 {
+            if depth_i > depth_j * 25 {
                 continue;
             }
 
