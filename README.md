@@ -1,5 +1,6 @@
 # savont - Amplicon Sequence Variants (ASVs) and taxonomic profiling for long read amplicons
 
+
 **Savont** generates [**Amplicon Sequence Variants (ASVs)**](https://en.wikipedia.org/wiki/Amplicon_sequence_variant) at **single-nucleotide resolution** from long-read amplicon sequencing data such as
 
 - Oxford Nanopore (ONT) R10.4 sequencing (preferably with SUP basecalling)
@@ -21,15 +22,19 @@ Savont differs from mapping-based approaches (e.g. Emu or ONT's epi2me workflow)
     <img width="90%" alt="github-diagram" src="https://github.com/user-attachments/assets/c0d9e356-ee1d-4d60-a217-c050e5abd0dc" />
 </p>
 
-## Preliminary results
+## Results
 
-We have compiled some [very preliminary results available here](https://github.com/bluenote-1577/savont/wiki/Savont-Preliminary-Results).
+> [!tip]
+> [The savont preprint](https://www.biorxiv.org/content/10.64898/2026.05.26.727271v1) is now out! Please see the preprint for results and methodological details. 
 
 <p align="center">
-<img width="60%" alt="detection_probability_vs_depth_nm_0" src="https://github.com/user-attachments/assets/19dbacad-2856-4888-a75e-0f1406f73265" />
+<img width="90%" alt="image" src="https://github.com/user-attachments/assets/e4da4032-e080-48a5-b04a-e8bbd2ad1976" />
+    <p align="center"><i>ONT and HiFi results on 8-species community for full-length 16S sequences.</i></p>
 </p>
+
 <p align="center">
-Savont is an order of magnitude (or two) more sensitive for ASV retrieval compared to denoising methods for ONT R10.4 sup reads. Yet, it can retrieve most ASVs (i.e., exact, multi-copy 16s sequences) in this dataset (Zymo Microbial Community Standard). 
+<img width="90%" alt="image" src="https://github.com/user-attachments/assets/0ce3f9d9-3040-4e87-aa35-f798767acdc7" />
+    <p align="center"><i>Diversity and ASV metrics on complex full-length ONT 16S amplicons.</i> </p>
 </p>
 
 
@@ -250,7 +255,6 @@ qiime taxa barplot --i-table feature-table.qza --i-taxonomy taxonomy.qza \
 ```
 
 
-
 ## Database Information
 
 ### EMU (`emu-1`)
@@ -265,28 +269,13 @@ More comprehensive than EMU, especially for understudied taxa. However, species-
 
 GreenGenes2 2024.09 species-level trainset (DADA2 format). Unannotated ranks are reported as `Greengenes_unannotated`.
 
-
-## Algorithm Overview
-
-### ASV Generation Pipeline
-
-Savont clusters reads using novel polymorphic marker (SNPmer) algorithms, polishes to get consensus ASVs, removes chimeras, and refines depths with an EM algorithm over read-level alignments.
-
-### Taxonomic Classification
-
-**`savont classify`**: maps ASVs to the database with minimap2, resolves multi-mappers with an EM algorithm, then filters by identity for species/genus-level calls.
-
-**`savont sintax`**: re-implements [Edgar's sintax algorithm](https://www.biorxiv.org/content/10.1101/074161v1). Subsamples 32 canonical 12-mers per ASV per iteration (100 iterations), finds the best-matching database entry for each subsample, and reports the fraction of iterations supporting each rank as the bootstrap confidence.
-
-
-
 ### CHANGELOG
 
 See [the changelog.](CHANGELOG.md)
 
 ## Citation
 
-FORTHCOMING WORK.
+Jim Shaw, Marie Riisgaard-Jensen, Kasper Skytte Andersen, Rasmus Kirkegaard, Morten Kam Dahl Dueholm, Heng Li. bioRxiv 2026.05.26.727271; doi: https://doi.org/10.64898/2026.05.26.727271
 
 **If you use any provided database, cite:**
 
