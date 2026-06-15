@@ -200,10 +200,8 @@ fn generate_consensus_poa(
         return Vec::new();
     }
 
-    // SPOA implementation
     let mut engine = spoa_rs::AlignmentEngine::new_affine(spoa_rs::AlignmentType::kOV, 3, -8, -6, -6);
     let mut graph = spoa_rs::Graph::new();
-
 
     for i in 0..sequences.len() {
         let str_seq = String::from_utf8_lossy(&sequences[i]);
@@ -215,9 +213,6 @@ fn generate_consensus_poa(
     let consensus = graph.generate_consensus();
 
     return consensus.into_bytes();
-
-    // Generate consensus with coverage threshold
-    //graph.consensus()
 }
 
 pub fn align_and_consensus(twin_reads: &[TwinRead], clusters: Vec<Vec<usize>>, args: &Cli, output_dir: &PathBuf) -> Vec<ConsensusSequence> {
@@ -1513,6 +1508,202 @@ struct EquivalenceClass {
     asv_indices: Vec<usize>,
 }
 
+/// Refine ASV depths using minimap2 all-vs-all mapping (used in low-polymorphism mode).
+/// Skips the SNPmer index entirely; maps every read to the ASV FASTA with minimap2.
+fn refine_asv_depths_with_minimap2(
+    twin_reads: &[TwinRead],
+    consensuses: &mut Vec<ConsensusSequence>,
+    args: &Cli,
+    temp_dir: &PathBuf,
+) {
+    if consensuses.is_empty() {
+        log::warn!("No consensuses to refine (minimap2 path)");
+        return;
+    }
+
+    let mapping_file_writer = Mutex::new(std::io::BufWriter::new(
+        std::fs::File::create(temp_dir.join("read_to_asv_mappings.tsv"))
+            .expect("Failed to create read_to_asv_mappings.tsv"),
+    ));
+
+    log::info!("Low-polymorphism mode: refining ASV depths via minimap2 all-to-all mapping");
+
+    // Write ASV sequences to FASTA (reuse the same path as the normal EM path)
+    let asv_fasta_path = temp_dir.join("final_asvs_for_em.fasta");
+    write_consensus_fasta(consensuses, &asv_fasta_path, "em_refinement")
+        .expect("Failed to write ASVs for EM refinement (minimap2 path)");
+
+    // Build a multi-sequence minimap2 index over all ASV sequences.
+    // target_id in mapping results directly corresponds to the ASV index (0-based order in FASTA).
+    let aligner = Aligner::builder()
+        .lrhq()
+        .with_index_threads(args.threads)
+        .with_cigar()
+        .with_index(asv_fasta_path.to_str().unwrap(), None)
+        .expect("Failed to build minimap2 index for ASVs");
+
+    log::info!("Mapping {} reads to {} ASVs via minimap2", twin_reads.len(), consensuses.len());
+
+    let eq_classes: Mutex<HashMap<EquivalenceClass, usize>> = Mutex::new(HashMap::new());
+    let filtered_reads_count = Mutex::new(0usize);
+    let total_assigned_reads = Mutex::new(0usize);
+
+    for cons in consensuses.iter_mut() {
+        cons.unambig_best_read_map_count = Some(0);
+        cons.ambig_read_map_count = Some(0);
+        cons.num_map_leq_10nm = Some(0);
+    }
+
+    let unambig_read_map_count = Mutex::new(vec![0usize; consensuses.len()]);
+    let ambig_read_map_count = Mutex::new(vec![0usize; consensuses.len()]);
+    let num_map_leq_10nm = Mutex::new(vec![0usize; consensuses.len()]);
+
+    twin_reads.par_iter().for_each(|twin_read| {
+        let seq: Vec<u8> = twin_read.dna_seq.iter().map(|x| x.to_char().to_ascii_uppercase() as u8).collect();
+        let mappings = aligner.map(&seq, true, false, None, None, None).unwrap_or_default();
+
+        // Keep only primary/supplementary hits with mapq > 0
+        let valid: Vec<_> = mappings.iter()
+            .filter(|m| m.mapq > 0 && m.alignment.is_some())
+            .collect();
+
+        if valid.is_empty() {
+            *filtered_reads_count.lock().unwrap() += 1;
+            return;
+        }
+
+        // Find the best NM among valid hits
+        let best_nm = valid.iter()
+            .map(|m| m.alignment.as_ref().unwrap().nm)
+            .min()
+            .unwrap();
+
+        // Collect all hits tied at the best NM
+        let mut best_asv_indices: Vec<usize> = valid.iter()
+            .filter(|m| m.alignment.as_ref().unwrap().nm == best_nm)
+            .map(|m| m.target_id as usize)
+            .collect();
+        best_asv_indices.sort();
+        best_asv_indices.dedup();
+
+        {
+            let mut writer = mapping_file_writer.lock().unwrap();
+            for &asv_idx in &best_asv_indices {
+                writeln!(writer, "{}\tasv:{}\t{}", twin_read.id, consensuses[asv_idx].id, best_nm)
+                    .expect("Failed to write read_to_asv_mappings.tsv");
+            }
+        }
+
+        if best_asv_indices.len() == 1 {
+            let asv_idx = best_asv_indices[0];
+            unambig_read_map_count.lock().unwrap()[asv_idx] += 1;
+        } else {
+            for &asv_idx in &best_asv_indices {
+                ambig_read_map_count.lock().unwrap()[asv_idx] += 1;
+            }
+        }
+
+        if best_nm <= 10 {
+            for &asv_idx in &best_asv_indices {
+                num_map_leq_10nm.lock().unwrap()[asv_idx] += 1;
+            }
+        }
+
+        let eq_class = EquivalenceClass { asv_indices: best_asv_indices };
+        *eq_classes.lock().unwrap().entry(eq_class).or_insert(0) += 1;
+        *total_assigned_reads.lock().unwrap() += 1;
+    });
+
+    let eq_classes = eq_classes.into_inner().unwrap();
+    let filtered_reads = filtered_reads_count.into_inner().unwrap();
+    let total_assigned = total_assigned_reads.into_inner().unwrap();
+
+    log::info!("Filtered {} reads with no valid minimap2 mapping", filtered_reads);
+    log::info!("Total assigned reads: {}", total_assigned);
+    log::info!("Total percentage assigned: {:.2}%",
+        (total_assigned as f64 / (total_assigned + filtered_reads) as f64) * 100.0);
+
+    let unambig_read_map_count = unambig_read_map_count.into_inner().unwrap();
+    let ambig_read_map_count = ambig_read_map_count.into_inner().unwrap();
+    let num_map_leq_10nm = num_map_leq_10nm.into_inner().unwrap();
+    for i in 0..consensuses.len() {
+        consensuses[i].unambig_best_read_map_count = Some(unambig_read_map_count[i]);
+        consensuses[i].ambig_read_map_count = Some(ambig_read_map_count[i]);
+        consensuses[i].num_map_leq_10nm = Some(num_map_leq_10nm[i]);
+    }
+
+    if eq_classes.is_empty() {
+        log::warn!("No reads mapped to any ASV (minimap2 path). Keeping original depths.");
+        return;
+    }
+
+    // EM algorithm — identical to the SNPmer path
+    let num_asvs = consensuses.len();
+    let mut asv_abundances = vec![1.0 / num_asvs as f64; num_asvs];
+    let convergence_threshold = 0.01 / total_assigned as f64;
+
+    log::info!("Running EM algorithm with convergence threshold: {:.6e}", convergence_threshold);
+
+    let mut iteration = 0;
+    const MAX_ITERATIONS: usize = 10000;
+
+    loop {
+        iteration += 1;
+        let mut new_asv_abundances = vec![0.0; num_asvs];
+
+        for (eq_class, count) in &eq_classes {
+            let denominator: f64 = eq_class.asv_indices.iter()
+                .map(|&asv_idx| asv_abundances[asv_idx])
+                .sum();
+
+            if denominator > 0.0 {
+                for &asv_idx in &eq_class.asv_indices {
+                    let contribution = (*count as f64) * asv_abundances[asv_idx] / denominator;
+                    new_asv_abundances[asv_idx] += contribution;
+                }
+            }
+        }
+
+        let total_counts: f64 = new_asv_abundances.iter().sum();
+        if total_counts > 0.0 {
+            for abundance in new_asv_abundances.iter_mut() {
+                *abundance /= total_assigned as f64;
+            }
+        }
+
+        let max_change = asv_abundances.iter()
+            .zip(new_asv_abundances.iter())
+            .map(|(old, new)| (old - new).abs())
+            .fold(0.0, f64::max);
+
+        asv_abundances = new_asv_abundances;
+
+        if max_change < convergence_threshold || iteration >= MAX_ITERATIONS {
+            log::info!("EM converged after {} iterations (max change: {:.6e})", iteration, max_change);
+            break;
+        }
+    }
+
+    log::info!("Updating ASV depths based on EM abundances");
+    for (asv_idx, consensus) in consensuses.iter_mut().enumerate() {
+        let em_abundance = asv_abundances[asv_idx];
+        let new_depth = (em_abundance * total_assigned as f64).round() as usize;
+        if new_depth != 0 && consensus.depth / new_depth > 10 {
+            log::debug!("ASV {} possible removal due to coverage drop of 10x: original depth {}, new depth {}",
+                asv_idx, consensus.depth, new_depth);
+        }
+        consensus.depth = new_depth;
+    }
+
+    let original_count = consensuses.len();
+    consensuses.retain(|c| c.depth > 0);
+    let filtered_count = original_count - consensuses.len();
+    if filtered_count > 0 {
+        log::info!("Filtered {} ASVs with zero depth after EM refinement (minimap2 path)", filtered_count);
+    }
+    log::info!("EM refinement complete (minimap2 path): {} ASVs remaining", consensuses.len());
+}
+
 /// Refine ASV depths using EM algorithm on read-level mappings
 /// Maps all reads back to final ASVs using k-mer/SNPmer-based approach
 pub fn refine_asv_depths_with_em(
@@ -1522,6 +1713,10 @@ pub fn refine_asv_depths_with_em(
     args: &Cli,
     temp_dir: &PathBuf,
 ) {
+    if args.low_polymorphism {
+        return refine_asv_depths_with_minimap2(twin_reads, consensuses, args, temp_dir);
+    }
+
     if consensuses.is_empty() {
         log::warn!("No consensuses to refine");
         return;

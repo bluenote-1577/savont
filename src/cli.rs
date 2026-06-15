@@ -77,11 +77,11 @@ pub struct ClusterArgs {
     pub c: usize,
 
     /// Minimum read length for reads 
-    #[arg(long, default_value = "1100", help_heading = CLI_HEADINGS[0])]
+    #[arg(short = 'm', long, default_value = "1100", help_heading = CLI_HEADINGS[0])]
     pub min_read_length: usize,
 
     /// Maximum read length for reads
-    #[arg(long, default_value = "2000", help_heading = CLI_HEADINGS[0])]
+    #[arg(short = 'M', long, default_value = "2000", help_heading = CLI_HEADINGS[0])]
     pub max_read_length: usize,
 
     /// Minimum estimated read accuracy (%) to include in clustering
@@ -136,6 +136,11 @@ pub struct ClusterArgs {
     /// Disable SNPmer clustering (not recommended, uses only k-mers)
     #[arg(long, default_value_t=false, help_heading = CLI_HEADINGS[2], hide = true)]
     pub no_snpmers: bool,
+
+    /// Low-polymorphism mode: skips SNPmer clustering and uses minimap2 for read-to-ASV
+    /// mapping. Auto-enabled when >75% of reads have no SNPmers (e.g. single-strain samples).
+    #[arg(long, default_value_t=false, help_heading = CLI_HEADINGS[2])]
+    pub low_polymorphism: bool,
 
     /// K-mer size for clustering (must be odd and < 24)
     #[arg(short, long, default_value = "17", help_heading = CLI_HEADINGS[1], hide = true)]

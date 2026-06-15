@@ -2,6 +2,11 @@
 
 All notable changes to savont will be documented in this file.
 
+## [0.5.1] - 2026-6-14
+
+- Added a way to autodetect samples with low polymorphism. In this case, we don't proceed with SNPmer clustering and just proceed with k-mer clusters + polishing.
+- Added `-m` and `-M` for min read length and max read length CLI arguments. 
+
 ## [0.5.0] - 2026-05-11
 
 ### Changed

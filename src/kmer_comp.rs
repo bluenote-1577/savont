@@ -234,8 +234,7 @@ pub fn twin_reads_from_snpmers(kmer_info: &mut KmerGlobalInfo, blockmer_info: &m
     if log::log_enabled!(log::Level::Trace){
         for twin_read in twin_reads.iter(){
             let decoded_snpmers = twin_read.snpmers_vec().into_iter().map(|x| (x.0, decode_kmer48(x.1, twin_read.k))).collect::<Vec<_>>();
-            log::trace!("{} {:?}", twin_read.id, decoded_snpmers);
-            log::trace!("{} NUM_SNPMERS {:?} LEN {}", twin_read.id, twin_read.snpmers_vec().len(), twin_read.base_length);
+            log::trace!("SNPMERS in READ {} {:?}", twin_read.id, decoded_snpmers);
         }
     }
 

@@ -543,7 +543,9 @@ pub fn get_twin_read_syncmer(
         }
     }
 
-    log::trace!("Read ID: {}, Blockmers found so far: {}, {:?}", id,  debug_blockmers.len(), debug_blockmers);
+    if blockmer_set.len() > 0{
+        log::trace!("Read ID: {}, Blockmers found so far: {}, {:?}", id,  debug_blockmers.len(), debug_blockmers);
+    }
 
     let mut no_dup_snpmers_kmers = vec![];
     let mut no_dup_snpmers_positions = vec![];

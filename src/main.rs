@@ -49,7 +49,6 @@ fn main() {
 fn run_cluster(args: &cli::ClusterArgs, cli_args: &cli::Cli) {
     let mut args = args.clone();
     let output_dir = initialize_setup_cluster(&mut args, cli_args);
-    let args = args; // make immutable after setup
 
     let time_start = Instant::now();
 
@@ -67,13 +66,18 @@ fn run_cluster(args: &cli::ClusterArgs, cli_args: &cli::Cli) {
     log::info!("Using blockmers: {}", args.use_blockmers);
 
     // Step 1.5: Get twin reads from SNPmers
-    let twin_reads = get_twin_reads_from_kmer_info(
+    let (twin_reads, detected_low_poly) = get_twin_reads_from_kmer_info(
         &mut kmer_info,
         &mut blockmer_info,
         &args,
         &temp_dir,
         &temp_dir.join("binary_temp"),
     );
+    if detected_low_poly && !args.low_polymorphism {
+        log::warn!("Auto-enabling --low-polymorphism: >75% of reads have no SNPmers. SNPmer clustering and index will be skipped.");
+        args.low_polymorphism = true;
+    }
+    let args = args; // make immutable after setup
 
     log::info!("=== STAGE 2: Clustering reads by k-mers ===");
     let clusters = asv_cluster::cluster_reads_by_kmers(&twin_reads, &args, &temp_dir);
@@ -162,6 +166,10 @@ fn run_cluster(args: &cli::ClusterArgs, cli_args: &cli::Cli) {
 
     // Write final cluster information
     let final_clusters = output_dir.join("final_clusters.tsv");
+
+    // Change ids to the order to match up with the final asvs
+    consensuses.iter_mut().enumerate().for_each(|(i, c)| c.id = i);
+
     alignment::write_clusters_tsv(&consensuses, &twin_reads, &final_clusters, "final")
         .expect("Failed to write final_clusters.tsv");
     log::info!("=== SAVONT COMPLETED SUCCESSFULLY in {:?} SECONDS ===", time_start.elapsed().as_secs());
@@ -494,11 +502,19 @@ fn get_twin_reads_from_kmer_info(
     args: &cli::ClusterArgs,
     _output_dir: &PathBuf,
     _cleaning_temp_dir: &PathBuf,
-) -> Vec<types::TwinRead>{
+) -> (Vec<types::TwinRead>, bool) {
     log::info!("Getting reads...");
     let mut twin_reads_raw = kmer_comp::twin_reads_from_snpmers(kmer_info, blockmer_info, &args);
     twin_reads_raw.sort_by(|a,b| b.est_id.unwrap_or(100.0).partial_cmp(&a.est_id.unwrap_or(100.0)).unwrap());
-    return twin_reads_raw;
+    let num_reads_without_snpmers = twin_reads_raw.iter().filter(|tr| tr.snpmers_vec().is_empty()).count();
+    let fraction_without = num_reads_without_snpmers as f64 / twin_reads_raw.len() as f64;
+    log::info!("Total reads: {}, Reads without SNPmers: {} ({:.2}%)",
+        twin_reads_raw.len(), num_reads_without_snpmers, fraction_without * 100.0);
+    let auto_low_poly = fraction_without > 0.75;
+    if fraction_without > 0.10{
+        log::warn!("High fraction of reads without SNPmers: {:.2}%. This may indicate low polymorphism in the sample. SAVONT MAY FAIL!", fraction_without * 100.0);
+    }
+    (twin_reads_raw, auto_low_poly)
 }
 
 fn debug_consensus_twin_read(kmer_info: &types::KmerGlobalInfo, consensuses: &[ConsensusSequence], args: &cli::ClusterArgs) {

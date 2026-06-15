@@ -563,6 +563,20 @@ pub fn cluster_reads_by_snpmers(
     args: &Cli,
     output_dir: &PathBuf,
 ) -> Vec<Vec<usize>> {
+    // In low-polymorphism mode the SNPmer signal is driven by sequencing errors rather than
+    // real biological variation. Skip SNPmer-based sub-clustering and pass k-mer clusters
+    // through directly so SNPmer-less reads are not discarded.
+    if args.low_polymorphism {
+        log::info!("Low-polymorphism mode: skipping SNPmer clustering, passing k-mer clusters through.");
+        let mut clusters: Vec<Vec<usize>> = kmer_clusters
+            .iter()
+            .filter(|c| c.len() >= args.min_cluster_size)
+            .cloned()
+            .collect();
+        clusters.sort_by(|a, b| b.len().cmp(&a.len()));
+        return clusters;
+    }
+
     log::info!("Starting greedy SNPmer-based clustering within k-mer clusters...");
 
     let k = args.kmer_size;
@@ -647,70 +661,6 @@ pub fn cluster_reads_by_snpmers(
             if count % 10_000 == 0 {
                 log::info!("Processed {} / {} reads for SNPmer clustering in k-mer cluster {} with {} reps",  count, kmer_cluster.len(), kmer_cluster_id, representatives.len());
             }
-
-            // if count % 1_000_000 == 0 {
-            //     //log::info!("Processed {} reads for SNPmer clustering", count);
-
-            //     // Perform intermediate reclustering to merge fragmented clusters
-            //     log::info!("Count {} / {} for cluster {}: performing intermediate reclustering within k-mer cluster {}", count, kmer_cluster.len(), kmer_cluster_id, kmer_cluster_id);
-
-            //     // Step 1: Build current clusters from local_assignment
-            //     let mut cluster_map = HashMap::new();
-            //     for (read_id, rep_id) in &local_assignment {
-            //         if cluster_map.contains_key(rep_id) == false {
-            //             cluster_map.insert(*rep_id, vec![rep_id.clone()]);
-            //         }
-            //         else{
-            //             cluster_map.entry(*rep_id).or_insert_with(Vec::new).push(*read_id);
-            //         }
-            //     }
-
-            //     let mut current_clusters: Vec<Vec<usize>> = cluster_map.into_values().collect();
-            //     current_clusters.sort_by(|a, b| b.len().cmp(&a.len()));
-
-            //     log::trace!("Before intermediate recluster: {} clusters", current_clusters.len());
-
-            //     // Step 2: Perform one round of reclustering using top 100 reads for consensus
-            //     let (merged_clusters, num_merges) = recluster_one_round_top_n(
-            //         current_clusters,
-            //         twin_reads,
-            //         k,
-            //         args.blockmer_length,
-            //         PolyMarkerType::Snpmer,
-            //         Some(200), // Use only top 100 reads for fast consensus building
-            //     );
-
-            //     log::debug!("Intermediate recluster for kmer group {} : merged {} clusters, now have {} clusters",
-            //         kmer_cluster_id, num_merges, merged_clusters.len());
-
-            //     // Step 3: Rebuild state from merged clusters
-            //     // Clear the index and rebuild from scratch
-            //     snpmer_index.clear();
-            //     local_assignment.clear();
-            //     rep_size.clear();
-
-            //     // Rebuild from merged clusters
-            //     for cluster in &merged_clusters {
-            //         if cluster.is_empty() {
-            //             continue;
-            //         }
-
-            //         let rep_id = cluster[0]; // First read becomes the representative
-
-            //         // Add representative's SNPmers to index
-            //         let rep_snpmers = twin_reads[rep_id].snpmer_kmers();
-            //         add_read_snpmers_to_index(&mut snpmer_index, rep_id, &rep_snpmers, k);
-
-            //         // Assign all reads in cluster to this representative
-            //         for &read_id in cluster {
-            //             local_assignment.insert(read_id, rep_id);
-            //         }
-
-            //         rep_size.insert(rep_id, cluster.len());
-            //     }
-
-            //     log::trace!("Rebuilt index with {} representatives", snpmer_index.len());
-            // }
         }
 
         // Add representatives

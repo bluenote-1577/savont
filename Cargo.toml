@@ -1,6 +1,6 @@
 [package]
 name = "savont"
-version = "0.5.0"
+version = "0.5.1"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 #build = "build.rs"
@@ -8,6 +8,7 @@ license = "MIT OR Apache-2.0"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+spoa_rs = "0.1"
 needletail = {version = "0.6.3", features = ["bzip2", "flate2"], default-features = false}
 flexi_logger = {version = "0.29", features = ["colors"] }
 log = "0"
@@ -29,7 +30,6 @@ sysinfo = "0.34.2"
 clap-num = "1.2.0"
 clap-markdown = { git = "https://github.com/bluenote-1577/clap-markdown.git" }
 minimap2 = "0.1.28"
-spoa_rs = "0.1"
 #triple_accel = "0.4"
 
 [target.'cfg(target_arch = "aarch64")'.features]
