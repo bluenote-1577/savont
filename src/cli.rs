@@ -44,7 +44,7 @@ pub enum Commands {
 
 #[derive(Parser, Debug, Clone)]
 pub struct ClusterArgs {
-    /// Input read file(s) in FASTQ or FASTA format (.gz supported). Multiple files are concatenated.
+    /// Input read file(s) in FASTQ or FASTA format (.gz supported). Multiple files are concatenated unless `--pooled-samples` is specified, in which case each file is treated as a distinct sample.
     #[arg(num_args = 1.., required = true, value_name = "FASTQ/FASTA")]
     pub input_files: Vec<String>,
 
