@@ -804,23 +804,24 @@ pub fn load_fasta_with_needletail(path: &Path) -> std::io::Result<Vec<(String, V
     Ok(sequences)
 }
 
-/// Extract depth values from FASTA headers (format: >prefix_depth_N)
+/// Extract total depth from a FASTA header token (supports both "42" and "42-15-27" formats).
+fn parse_depth_token(token: &str) -> usize {
+    let depth: usize = token.split('-')
+        .filter_map(|s| s.parse::<usize>().ok())
+        .sum();
+    depth.max(1)
+}
+
+/// Extract depth values from FASTA headers (format: >prefix_depth_N or >prefix_depth_N-M-K).
 pub fn extract_depths_from_headers(sequences: &[(String, Vec<u8>)]) -> Vec<usize> {
     sequences.iter().map(|(header, _)| {
-        // Parse depth from header like ">final_consensus_0_depth_42"
-        let first_non_whitespace = header.split_whitespace().next().unwrap_or(header);
-        first_non_whitespace.split('_')
-            .last()
-            .and_then(|s| s.parse::<usize>().ok())
-            .unwrap_or(1)
+        let first_token = header.split_whitespace().next().unwrap_or(header);
+        let depth_token = first_token.split('_').last().unwrap_or("1");
+        parse_depth_token(depth_token)
     }).collect()
 }
 
 pub fn extract_depth_string(sequence: &str) -> String {
-    // Parse depth from header like ">final_consensus_0_depth_42"
-    let first_non_whitespace = sequence.split_whitespace().next().unwrap_or(sequence);
-    first_non_whitespace.split('_')
-        .last()
-        .unwrap_or("1")
-        .to_string()
+    let first_token = sequence.split_whitespace().next().unwrap_or(sequence);
+    first_token.split('_').last().unwrap_or("1").to_string()
 }

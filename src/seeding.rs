@@ -652,6 +652,7 @@ pub fn get_twin_read_syncmer(
         split_start: 0,
         snpmer_id_threshold: None,
         lsh_signatures: vec![],
+        file_idx: 0,
     })
 
 }

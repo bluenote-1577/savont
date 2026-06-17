@@ -99,7 +99,7 @@ pub fn twin_reads_from_snpmers(kmer_info: &mut KmerGlobalInfo, blockmer_info: &m
     let arc_minrl = Arc::new(min_read_length);
     let arc_maxrl = Arc::new(max_read_length);
 
-    for fastq_file in files_owned{
+    for (file_idx, fastq_file) in files_owned.into_iter().enumerate(){
         let (mut tx, rx) = spmc::channel();
         let min_read_length = *Arc::clone(&arc_minrl);
         let max_read_length = *Arc::clone(&arc_maxrl);
@@ -140,6 +140,7 @@ pub fn twin_reads_from_snpmers(kmer_info: &mut KmerGlobalInfo, blockmer_info: &m
         let k = args.kmer_size;
         let c = args.c;
         let l = args.blockmer_length;
+        let file_idx_u32 = file_idx as u32;
         for _ in 0..args.threads{
             let rx = rx.clone();
             let set = Arc::clone(&snpmer_set);
@@ -180,7 +181,7 @@ pub fn twin_reads_from_snpmers(kmer_info: &mut KmerGlobalInfo, blockmer_info: &m
                                         }
                                     }
                                 }
-                                //< 5 % of the k-mers are solid; remove. This is usually due to highly repetitive stuff. 
+                                //< 5 % of the k-mers are solid; remove. This is usually due to highly repetitive stuff.
                                 if solid_mini_indices.len() < seqlen / c / 20{
                                     *num_repetitive.lock().unwrap() += 1;
                                     continue;
@@ -204,6 +205,7 @@ pub fn twin_reads_from_snpmers(kmer_info: &mut KmerGlobalInfo, blockmer_info: &m
                                 twin_read.retain_mini_indices(solid_mini_indices);
                                 twin_read.retain_snpmer_indices(solid_snpmer_indices);
                                 twin_read.compute_lsh_signatures();
+                                twin_read.file_idx = file_idx_u32;
 
                                 let mut vec = twrv.lock().unwrap();
                                 vec.push(twin_read);

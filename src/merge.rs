@@ -36,14 +36,42 @@ fn sample_name_from_dir(dir: &Path) -> String {
         .to_string()
 }
 
-fn depth_from_header(header: &str) -> u64 {
-    header.split_whitespace()
-        .next()
-        .unwrap_or("")
-        .split('_')
-        .last()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(0)
+/// Read feature-table.tsv and return (sample_names, otu_id → per-sample depths).
+/// Handles both single-column and multi-column (pooled-samples) tables.
+fn feature_table_from_dir(dir: &Path) -> Option<(Vec<String>, HashMap<String, Vec<u64>>)> {
+    let ft = dir.join("feature-table.tsv");
+    let f = std::fs::File::open(&ft).ok()?;
+    let mut lines = BufReader::new(f).lines().flatten();
+
+    // Skip comment lines until we hit the header
+    let header_line = lines.find(|l| l.starts_with("#OTU ID"))?;
+    let cols: Vec<&str> = header_line.split('\t').collect();
+    // Columns 1.. are sample names
+    let sample_names: Vec<String> = cols[1..].iter().map(|s| s.to_string()).collect();
+    if sample_names.is_empty() {
+        return None;
+    }
+
+    let n_samples = sample_names.len();
+    let mut depths: HashMap<String, Vec<u64>> = HashMap::new();
+    for line in lines {
+        if line.is_empty() || line.starts_with('#') { continue; }
+        let fields: Vec<&str> = line.split('\t').collect();
+        if fields.is_empty() { continue; }
+        let otu_id = fields[0].to_string();
+        let per_sample: Vec<u64> = (1..=n_samples)
+            .map(|i| fields.get(i).and_then(|v| v.parse().ok()).unwrap_or(0))
+            .collect();
+        depths.insert(otu_id, per_sample);
+    }
+
+    Some((sample_names, depths))
+}
+
+fn depth_from_header_total(header: &str) -> u64 {
+    let token = header.split_whitespace().next().unwrap_or("").split('_').last().unwrap_or("0");
+    // Sum dash-separated per-sample depths if present (pooled format)
+    token.split('-').filter_map(|s| s.parse::<u64>().ok()).sum::<u64>().max(0)
 }
 
 // ── taxonomy TSV parsing ──────────────────────────────────────────────────────
@@ -308,18 +336,46 @@ pub fn merge(args: &cli::MergeArgs) {
     let output_dir = Path::new(&args.output_dir);
     std::fs::create_dir_all(output_dir).expect("Failed to create output directory");
 
-    let n = args.input_dirs.len();
-    let mut sample_names: Vec<String> = Vec::with_capacity(n);
+    let n_dirs = args.input_dirs.len();
+
+    // ── first pass: determine column structure from feature-table.tsv ─────────
+    // Each directory may contribute 1 (single-sample) or N (pooled) columns.
+    let mut dir_col_offsets: Vec<usize> = Vec::with_capacity(n_dirs);
+    let mut dir_col_counts: Vec<usize> = Vec::with_capacity(n_dirs);
+    let mut sample_names: Vec<String> = Vec::new();
+
+    for input_dir in &args.input_dirs {
+        let dir = Path::new(input_dir);
+        dir_col_offsets.push(sample_names.len());
+        match feature_table_from_dir(dir) {
+            Some((names, _)) => {
+                dir_col_counts.push(names.len());
+                sample_names.extend(names);
+            }
+            None => {
+                dir_col_counts.push(1);
+                sample_names.push(sample_name_from_dir(dir));
+            }
+        }
+    }
+
+    let total_cols = sample_names.len();
     let mut asv_table: BTreeMap<String, (Vec<u8>, Vec<u64>)> = BTreeMap::new();
-    let mut total_reads: Vec<u64> = vec![0u64; n];
+    let mut total_reads: Vec<u64> = vec![0u64; total_cols];
 
     // hash → QIIME lineage string, built from asv_mappings
     let mut hash_to_lineage: HashMap<String, String> = HashMap::new();
 
-    // ── per-sample pass ───────────────────────────────────────────────────────
-    for (sample_idx, input_dir) in args.input_dirs.iter().enumerate() {
+    // ── second pass: fill in depths from feature-table.tsv ───────────────────
+    for (dir_idx, input_dir) in args.input_dirs.iter().enumerate() {
         let dir = Path::new(input_dir);
-        sample_names.push(sample_name_from_dir(dir));
+        let col_start = dir_col_offsets[dir_idx];
+        let n_cols = dir_col_counts[dir_idx];
+
+        // Read per-ASV depths from feature-table.tsv (preferred) or fall back to FASTA header
+        let ft_depths: HashMap<String, Vec<u64>> = feature_table_from_dir(dir)
+            .map(|(_, d)| d)
+            .unwrap_or_default();
 
         // ASVs — build a per-sample token→hash map for joining with asv_mappings
         let mut token_to_hash: HashMap<String, String> = HashMap::new();
@@ -327,19 +383,26 @@ pub fn merge(args: &cli::MergeArgs) {
         match load_fasta_with_needletail(&fasta_path) {
             Ok(seqs) => {
                 for (header, seq) in &seqs {
-                    let depth = depth_from_header(header);
-                    total_reads[sample_idx] += depth;
-                    let hash = seq_hash(seq);
                     let token = header.trim_start_matches('>')
                         .split_whitespace()
                         .next()
                         .unwrap_or("")
                         .to_string();
-                    token_to_hash.insert(token, hash.clone());
+                    let hash = seq_hash(seq);
+                    token_to_hash.insert(token.clone(), hash.clone());
+
+                    // Use feature-table.tsv depths; fall back to FASTA header total depth
+                    let per_col_depths: Vec<u64> = ft_depths.get(&token)
+                        .cloned()
+                        .unwrap_or_else(|| vec![depth_from_header_total(header)]);
+
                     let entry = asv_table
                         .entry(hash)
-                        .or_insert_with(|| (seq.clone(), vec![0u64; n]));
-                    entry.1[sample_idx] += depth;
+                        .or_insert_with(|| (seq.clone(), vec![0u64; total_cols]));
+                    for (col_i, &depth) in per_col_depths.iter().enumerate().take(n_cols) {
+                        total_reads[col_start + col_i] += depth;
+                        entry.1[col_start + col_i] += depth;
+                    }
                 }
             }
             Err(e) => {
@@ -365,16 +428,15 @@ pub fn merge(args: &cli::MergeArgs) {
         }
     }
 
-    log::info!("Loaded {} samples, {} unique ASVs", n, asv_table.len());
+    log::info!("Loaded {} input directories ({} total sample columns), {} unique ASVs",
+        n_dirs, total_cols, asv_table.len());
 
     // ── apply --relabel ───────────────────────────────────────────────────────
     if let Some(ref labels) = args.relabel {
-        if labels.len() != n {
+        if labels.len() != total_cols {
             log::error!(
-                "--relabel: {} label(s) provided for {} input director{}; counts must match",
-                labels.len(),
-                n,
-                if n == 1 { "y" } else { "ies" }
+                "--relabel: {} label(s) provided for {} total sample column(s); counts must match",
+                labels.len(), total_cols,
             );
             std::process::exit(1);
         }

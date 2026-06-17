@@ -5,6 +5,7 @@ use crate::taxonomy;
 use std::sync::Mutex;
 use rayon::prelude::*;
 use std::collections::HashMap;
+use std::io::{BufRead, BufReader, Write};
 
 /// Represents a mapping from an ASV to a database sequence
 #[derive(Debug, Clone)]
@@ -190,6 +191,139 @@ fn collect_best_mappings(
     all_mappings.into_inner().unwrap()
 }
 
+/// Read feature-table.tsv and return (sample_names, depths_per_asv[asv_idx][sample_k]).
+/// ASV ordering matched by OTU ID token to FASTA header token.
+fn read_feature_table_for_classify(
+    ft_path: &Path,
+    consensus_sequences: &[(String, Vec<u8>)],
+) -> Option<(Vec<String>, Vec<Vec<usize>>)> {
+    let f = std::fs::File::open(ft_path).ok()?;
+    let mut lines = BufReader::new(f).lines().flatten();
+
+    let header_line = lines.find(|l| l.starts_with("#OTU ID"))?;
+    let cols: Vec<&str> = header_line.split('\t').collect();
+    let sample_names: Vec<String> = cols[1..].iter().map(|s| s.to_string()).collect();
+    let n_samples = sample_names.len();
+    if n_samples == 0 { return None; }
+
+    let mut otu_depths: HashMap<String, Vec<usize>> = HashMap::new();
+    for line in lines {
+        if line.is_empty() || line.starts_with('#') { continue; }
+        let fields: Vec<&str> = line.split('\t').collect();
+        if fields.is_empty() { continue; }
+        let otu_id = fields[0].to_string();
+        let depths: Vec<usize> = (1..=n_samples)
+            .map(|i| fields.get(i).and_then(|v| v.parse().ok()).unwrap_or(0))
+            .collect();
+        otu_depths.insert(otu_id, depths);
+    }
+
+    let per_asv: Vec<Vec<usize>> = consensus_sequences.iter().map(|(header, _)| {
+        let token = header.trim_start_matches('>').split_whitespace().next().unwrap_or("");
+        otu_depths.get(token).cloned().unwrap_or_else(|| vec![0; n_samples])
+    }).collect();
+
+    Some((sample_names, per_asv))
+}
+
+/// Write wide-format species abundance table with one column per sample.
+fn write_species_abundance_pooled(
+    classifications: &[taxonomy::AsvClassification],
+    per_asv_per_sample: &[Vec<usize>],
+    sample_names: &[String],
+    output_path: &Path,
+) -> std::io::Result<()> {
+    use std::collections::BTreeMap;
+    let mut file = std::fs::File::create(output_path)?;
+
+    write!(file, "species\tgenus\tfamily\torder\tclass\tphylum\tclade\tsuperkingdom")?;
+    for name in sample_names { write!(file, "\t{}", name)?; }
+    writeln!(file)?;
+
+    let n_samples = sample_names.len();
+    let sample_totals: Vec<usize> = (0..n_samples)
+        .map(|k| per_asv_per_sample.iter().map(|s| s.get(k).copied().unwrap_or(0)).sum())
+        .collect();
+
+    let mut taxon_per_sample: BTreeMap<String, (taxonomy::TaxonomyAssignment, Vec<f64>)> = BTreeMap::new();
+    for cls in classifications {
+        if let Some(ref tax) = cls.taxonomy {
+            let key = format!("{}|{}|{}|{}|{}|{}|{}|{}", tax.species, tax.genus, tax.family, tax.order, tax.class, tax.phylum, tax.clade, tax.superkingdom);
+            let asv_idx = cls.asv_id.trim_start_matches("ASV_").parse::<usize>().unwrap_or(0);
+            let entry = taxon_per_sample.entry(key).or_insert_with(|| (tax.clone(), vec![0.0; n_samples]));
+            for k in 0..n_samples {
+                let depth = per_asv_per_sample.get(asv_idx).and_then(|s| s.get(k)).copied().unwrap_or(0);
+                if sample_totals[k] > 0 {
+                    entry.1[k] += depth as f64 / sample_totals[k] as f64;
+                }
+            }
+        }
+    }
+
+    let mut sorted: Vec<_> = taxon_per_sample.into_iter().collect();
+    sorted.sort_by(|a, b| {
+        let sum_a: f64 = a.1.1.iter().sum();
+        let sum_b: f64 = b.1.1.iter().sum();
+        sum_b.partial_cmp(&sum_a).unwrap()
+    });
+
+    for (_, (tax, abundances)) in sorted {
+        write!(file, "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}", tax.species, tax.genus, tax.family, tax.order, tax.class, tax.phylum, tax.clade, tax.superkingdom)?;
+        for &a in &abundances { write!(file, "\t{:.6}", a)?; }
+        writeln!(file)?;
+    }
+    Ok(())
+}
+
+/// Write wide-format genus abundance table with one column per sample.
+fn write_genus_abundance_pooled(
+    classifications: &[taxonomy::AsvClassification],
+    per_asv_per_sample: &[Vec<usize>],
+    sample_names: &[String],
+    output_path: &Path,
+) -> std::io::Result<()> {
+    use std::collections::BTreeMap;
+    let mut file = std::fs::File::create(output_path)?;
+
+    write!(file, "genus\tfamily\torder\tclass\tphylum\tclade\tsuperkingdom")?;
+    for name in sample_names { write!(file, "\t{}", name)?; }
+    writeln!(file)?;
+
+    let n_samples = sample_names.len();
+    let sample_totals: Vec<usize> = (0..n_samples)
+        .map(|k| per_asv_per_sample.iter().map(|s| s.get(k).copied().unwrap_or(0)).sum())
+        .collect();
+
+    let mut taxon_per_sample: BTreeMap<String, (taxonomy::TaxonomyAssignment, Vec<f64>)> = BTreeMap::new();
+    for cls in classifications {
+        if let Some(ref tax) = cls.taxonomy {
+            let key = format!("{}|{}|{}|{}|{}|{}", tax.genus, tax.family, tax.order, tax.class, tax.phylum, tax.clade);
+            let asv_idx = cls.asv_id.trim_start_matches("ASV_").parse::<usize>().unwrap_or(0);
+            let entry = taxon_per_sample.entry(key).or_insert_with(|| (tax.clone(), vec![0.0; n_samples]));
+            for k in 0..n_samples {
+                let depth = per_asv_per_sample.get(asv_idx).and_then(|s| s.get(k)).copied().unwrap_or(0);
+                if sample_totals[k] > 0 {
+                    entry.1[k] += depth as f64 / sample_totals[k] as f64;
+                }
+            }
+        }
+    }
+
+    let mut sorted: Vec<_> = taxon_per_sample.into_iter().collect();
+    sorted.sort_by(|a, b| {
+        let sum_a: f64 = a.1.1.iter().sum();
+        let sum_b: f64 = b.1.1.iter().sum();
+        sum_b.partial_cmp(&sum_a).unwrap()
+    });
+
+    for (_, (tax, abundances)) in sorted {
+        write!(file, "{}\t{}\t{}\t{}\t{}\t{}\t{}", tax.genus, tax.family, tax.order, tax.class, tax.phylum, tax.clade, tax.superkingdom)?;
+        for &a in &abundances { write!(file, "\t{:.6}", a)?; }
+        writeln!(file)?;
+    }
+    Ok(())
+}
+
 pub fn classify(args: &cli::ClassifyArgs, db: &taxonomy::Database) {
     // Step 2: Load consensus sequences from clustering output
     let input_fasta = Path::new(&args.input_dir).join(ASV_FILE);
@@ -212,8 +346,18 @@ pub fn classify(args: &cli::ClassifyArgs, db: &taxonomy::Database) {
 
     // Step 3: Build aligner using database FASTA file
     log::info!("Building minimap2 index from database FASTA: {}", db.fasta_path.display());
+
     // Step 5: Collect all best mappings for each ASV
-    let asv_depths = taxonomy::extract_depths_from_headers(&consensus_sequences);
+    // Read depths from feature-table.tsv if available (authoritative for pooled samples);
+    // fall back to parsing FASTA headers.
+    let ft_path = Path::new(&args.input_dir).join("feature-table.tsv");
+    let (ft_sample_names, per_asv_per_sample) = read_feature_table_for_classify(&ft_path, &consensus_sequences)
+        .unwrap_or_else(|| {
+            let depths = taxonomy::extract_depths_from_headers(&consensus_sequences);
+            (vec!["sample".to_string()], depths.iter().map(|&d| vec![d]).collect())
+        });
+
+    let asv_depths: Vec<usize> = per_asv_per_sample.iter().map(|s| s.iter().sum()).collect();
     let total_reads: usize = asv_depths.iter().sum();
 
     let all_mappings = collect_best_mappings(&consensus_sequences, &asv_depths, &db, &args);
@@ -368,13 +512,23 @@ pub fn classify(args: &cli::ClassifyArgs, db: &taxonomy::Database) {
     };
 
     let species_file = output_dir_path.join("species_abundance.tsv");
-    taxonomy::write_species_abundance(&classifications, &species_file)
-        .expect("Failed to write species abundance file");
+    if ft_sample_names.len() > 1 {
+        write_species_abundance_pooled(&classifications, &per_asv_per_sample, &ft_sample_names, &species_file)
+            .expect("Failed to write species abundance file");
+    } else {
+        taxonomy::write_species_abundance(&classifications, &species_file)
+            .expect("Failed to write species abundance file");
+    }
     log::info!("Wrote species abundance table to {}", species_file.display());
 
     let genus_file = output_dir_path.join("genus_abundance.tsv");
-    taxonomy::write_genus_abundance(&classifications, &genus_file)
-        .expect("Failed to write genus abundance file");
+    if ft_sample_names.len() > 1 {
+        write_genus_abundance_pooled(&classifications, &per_asv_per_sample, &ft_sample_names, &genus_file)
+            .expect("Failed to write genus abundance file");
+    } else {
+        taxonomy::write_genus_abundance(&classifications, &genus_file)
+            .expect("Failed to write genus abundance file");
+    }
     log::info!("Wrote genus abundance table to {}", genus_file.display());
 
     let mappings_file = output_dir_path.join("asv_mappings.tsv");

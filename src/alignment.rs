@@ -1,9 +1,9 @@
 use crate::{seeding, types::*, utils};
 use crate::constants::*;
 use std::io::Write;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use crate::cli::ClusterArgs as Cli;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use minimap2::Aligner;
 use rayon::prelude::*;
 use bio_seq::prelude::*;
@@ -833,8 +833,13 @@ pub fn write_consensus_fasta(
         let consensus_seq = cons_clone.decompressed_sequence.clone().unwrap();
         let start_non = consensus_seq.iter().enumerate().find(|&(_i, &b)| b != b'N').map(|(i, _)| i).unwrap_or(0);
         let end_non = consensus_seq.iter().enumerate().rfind(|&(_i, &b)| b != b'N').map(|(i, _)| i).unwrap_or(consensus_seq.len());
-        let header = format!(">{}_consensus_{}_depth_{} debug_id:{} chimera_score:{} unambiguous_read_assignments:{} ambig_read_assignments:{} num_align_leq_10_mismatches:{}", 
-            prefix, i, consensus.depth + consensus.appended_depth, consensus.id, consensus.chimera_score.unwrap_or(0), consensus.unambig_best_read_map_count.unwrap_or(0), 
+        let depth_field = if consensus.per_sample_depths.is_empty() {
+            (consensus.depth + consensus.appended_depth).to_string()
+        } else {
+            consensus.per_sample_depths.iter().map(|d| d.to_string()).collect::<Vec<_>>().join("-")
+        };
+        let header = format!(">{}_consensus_{}_depth_{} debug_id:{} chimera_score:{} unambiguous_read_assignments:{} ambig_read_assignments:{} num_align_leq_10_mismatches:{}",
+            prefix, i, depth_field, consensus.id, consensus.chimera_score.unwrap_or(0), consensus.unambig_best_read_map_count.unwrap_or(0),
             consensus.ambig_read_map_count.unwrap_or(0), consensus.num_map_leq_10nm.unwrap_or(0));
         writeln!(writer, "{}", header)?;
 
@@ -2025,8 +2030,276 @@ pub fn refine_asv_depths_with_em(
     log::info!("EM refinement complete: {} ASVs remaining", consensuses.len());
 }
 
+/// Compute per-sample depths for each ASV using the same SNPmer+EM machinery as the global EM.
+/// Called after `refine_asv_depths_with_em` when `--pooled-samples` is set.
+/// Returns a Vec indexed by [asv_idx][sample_k].
+pub fn compute_per_sample_depths(
+    twin_reads: &[TwinRead],
+    n_samples: usize,
+    consensuses: &[ConsensusSequence],
+    kmer_info: &KmerGlobalInfo,
+    args: &Cli,
+    asv_fasta_path: &Path,
+) -> Vec<Vec<usize>> {
+    let n_asvs = consensuses.len();
+    let mut result = vec![vec![0usize; n_samples]; n_asvs];
 
+    if n_asvs == 0 || n_samples == 0 {
+        return result;
+    }
 
+    if args.low_polymorphism {
+        return compute_per_sample_depths_minimap2(twin_reads, n_samples, consensuses, args, asv_fasta_path);
+    }
+
+    // Build ASV twin reads and SNPmer index once, shared across all sample iterations.
+    let asv_twin_reads = kmer_comp::twin_reads_from_fasta(
+        asv_fasta_path, kmer_info, args.kmer_size, args.c, args.blockmer_length, args.minimum_base_quality,
+    );
+    let k = args.kmer_size;
+    let mask = !(3u64 << (k - 1));
+    let mut asv_snpmer_index: FxHashMap<u64, Vec<(usize, Kmer48)>> = FxHashMap::default();
+    for (asv_idx, asv_read) in asv_twin_reads.iter().enumerate() {
+        for (_pos, kmer) in asv_read.snpmers_vec() {
+            let splitmer = kmer.to_u64() & mask;
+            asv_snpmer_index.entry(splitmer).or_insert_with(Vec::new).push((asv_idx, kmer));
+        }
+    }
+
+    let asv_twin_reads = Arc::new(asv_twin_reads);
+    let asv_snpmer_index = Arc::new(asv_snpmer_index);
+
+    for sample_k in 0..n_samples {
+        let sample_k_u32 = sample_k as u32;
+        let n_reads_this_sample = twin_reads.iter().filter(|r| r.file_idx == sample_k_u32).count();
+        if n_reads_this_sample == 0 {
+            log::info!("Sample {}: no reads found", sample_k);
+            continue;
+        }
+
+        let eq_classes: Mutex<HashMap<EquivalenceClass, usize>> = Mutex::new(HashMap::new());
+        let filtered_count = Mutex::new(0usize);
+        let total_assigned = Mutex::new(0usize);
+
+        let asv_twin_reads_ref = Arc::clone(&asv_twin_reads);
+        let asv_snpmer_index_ref = Arc::clone(&asv_snpmer_index);
+
+        twin_reads.par_iter()
+            .filter(|r| r.file_idx == sample_k_u32)
+            .for_each(|twin_read| {
+                let read_snpmers = twin_read.snpmer_kmers();
+                let read_minimizers: FxHashSet<Kmer48> = twin_read.minimizer_kmers().into_iter().cloned().collect();
+
+                let candidate_stats = find_compatible_candidates(&asv_snpmer_index_ref, &read_snpmers, k);
+
+                let mut asv_scores: Vec<(usize, f64, usize, usize)> = Vec::new();
+                for (asv_idx, (_matches, mismatches)) in candidate_stats {
+                    let asv_minimizers: FxHashSet<Kmer48> = asv_twin_reads_ref[asv_idx].minimizer_kmers().into_iter().cloned().collect();
+                    let minimizer_matches = read_minimizers.intersection(&asv_minimizers).count();
+                    if minimizer_matches == 0 { continue; }
+                    if (minimizer_matches as f64 / read_minimizers.len().min(asv_minimizers.len()) as f64)
+                        < (0.950f64).powi(k as i32) { continue; }
+                    let ratio = mismatches as f64 / minimizer_matches as f64 / args.c as f64;
+                    asv_scores.push((asv_idx, ratio, mismatches, minimizer_matches));
+                }
+
+                if asv_scores.is_empty() {
+                    *filtered_count.lock().unwrap() += 1;
+                    return;
+                }
+
+                let threshold = 0.0050;
+                let mut best_asv_indices: Vec<(usize, usize)> = asv_scores.iter()
+                    .filter(|(_, ratio, _, _)| *ratio <= threshold)
+                    .map(|(asv_idx, _, mismatches, _)| (*asv_idx, *mismatches))
+                    .collect();
+
+                if best_asv_indices.is_empty() {
+                    *filtered_count.lock().unwrap() += 1;
+                    return;
+                }
+
+                best_asv_indices.sort_by(|a, b| a.1.cmp(&b.1));
+                let lowest_mismatches = best_asv_indices[0].1;
+                best_asv_indices.retain(|(_, m)| *m == lowest_mismatches);
+
+                let seq_u8: Vec<u8> = twin_read.dna_seq.iter().map(|x| x.to_char().to_ascii_uppercase() as u8).collect();
+                let aligner = Aligner::builder()
+                    .lrhq()
+                    .with_index_threads(1)
+                    .with_cigar()
+                    .with_seq(&seq_u8)
+                    .expect("Failed to create per-sample aligner");
+
+                let mut best_alns: Vec<(usize, i32)> = Vec::new();
+                for (asv_idx, _) in best_asv_indices {
+                    let asv_tr = &asv_twin_reads_ref[asv_idx];
+                    let seq_u8_asv: Vec<u8> = asv_tr.dna_seq.iter().map(|x| x.to_char().to_ascii_uppercase() as u8).collect();
+                    let aln = aligner.map(&seq_u8_asv, true, false, None, None, None).unwrap();
+                    if aln.is_empty() { continue; }
+                    best_alns.push((asv_idx, aln[0].alignment.as_ref().unwrap().nm));
+                }
+
+                if best_alns.is_empty() {
+                    *filtered_count.lock().unwrap() += 1;
+                    return;
+                }
+
+                best_alns.sort_by(|a, b| a.1.cmp(&b.1));
+                let best_nm = best_alns[0].1;
+                let mut best_asv_aln_indices: Vec<usize> = best_alns.iter()
+                    .filter(|(_, nm)| *nm == best_nm)
+                    .map(|(idx, _)| *idx)
+                    .collect();
+                best_asv_aln_indices.sort();
+
+                if !best_asv_aln_indices.is_empty() {
+                    let eq_class = EquivalenceClass { asv_indices: best_asv_aln_indices };
+                    *eq_classes.lock().unwrap().entry(eq_class).or_insert(0) += 1;
+                    *total_assigned.lock().unwrap() += 1;
+                } else {
+                    *filtered_count.lock().unwrap() += 1;
+                }
+            });
+
+        let eq_classes = eq_classes.into_inner().unwrap();
+        let total_assigned = total_assigned.into_inner().unwrap();
+        let filtered = filtered_count.into_inner().unwrap();
+
+        log::info!("Sample {}: {} reads assigned, {} filtered", sample_k, total_assigned, filtered);
+
+        if eq_classes.is_empty() || total_assigned == 0 {
+            continue;
+        }
+
+        // EM
+        let mut asv_abundances = vec![1.0 / n_asvs as f64; n_asvs];
+        let convergence_threshold = 0.01 / total_assigned as f64;
+        let mut iteration = 0;
+        const MAX_ITERATIONS: usize = 10000;
+        loop {
+            iteration += 1;
+            let mut new_abundances = vec![0.0f64; n_asvs];
+            for (eq_class, count) in &eq_classes {
+                let denom: f64 = eq_class.asv_indices.iter().map(|&i| asv_abundances[i]).sum();
+                if denom > 0.0 {
+                    for &asv_idx in &eq_class.asv_indices {
+                        new_abundances[asv_idx] += (*count as f64) * asv_abundances[asv_idx] / denom;
+                    }
+                }
+            }
+            let total: f64 = new_abundances.iter().sum();
+            if total > 0.0 {
+                for a in new_abundances.iter_mut() { *a /= total_assigned as f64; }
+            }
+            let max_change = asv_abundances.iter().zip(new_abundances.iter())
+                .map(|(o, n)| (o - n).abs()).fold(0.0, f64::max);
+            asv_abundances = new_abundances;
+            if max_change < convergence_threshold || iteration >= MAX_ITERATIONS { break; }
+        }
+
+        for asv_idx in 0..n_asvs {
+            result[asv_idx][sample_k] = (asv_abundances[asv_idx] * total_assigned as f64).round() as usize;
+        }
+    }
+
+    result
+}
+
+fn compute_per_sample_depths_minimap2(
+    twin_reads: &[TwinRead],
+    n_samples: usize,
+    consensuses: &[ConsensusSequence],
+    args: &Cli,
+    asv_fasta_path: &Path,
+) -> Vec<Vec<usize>> {
+    let n_asvs = consensuses.len();
+    let mut result = vec![vec![0usize; n_samples]; n_asvs];
+
+    let aligner = Aligner::builder()
+        .lrhq()
+        .with_index_threads(args.threads)
+        .with_cigar()
+        .with_index(asv_fasta_path.to_str().unwrap(), None)
+        .expect("Failed to build minimap2 index for per-sample depths");
+
+    for sample_k in 0..n_samples {
+        let sample_k_u32 = sample_k as u32;
+
+        let eq_classes: Mutex<HashMap<EquivalenceClass, usize>> = Mutex::new(HashMap::new());
+        let filtered_count = Mutex::new(0usize);
+        let total_assigned = Mutex::new(0usize);
+
+        twin_reads.par_iter()
+            .filter(|r| r.file_idx == sample_k_u32)
+            .for_each(|twin_read| {
+                let seq: Vec<u8> = twin_read.dna_seq.iter().map(|x| x.to_char().to_ascii_uppercase() as u8).collect();
+                let mappings = aligner.map(&seq, true, false, None, None, None).unwrap_or_default();
+
+                let valid: Vec<_> = mappings.iter()
+                    .filter(|m| m.mapq > 0 && m.alignment.is_some())
+                    .collect();
+
+                if valid.is_empty() {
+                    *filtered_count.lock().unwrap() += 1;
+                    return;
+                }
+
+                let best_nm = valid.iter().map(|m| m.alignment.as_ref().unwrap().nm).min().unwrap();
+                let mut best_asv_indices: Vec<usize> = valid.iter()
+                    .filter(|m| m.alignment.as_ref().unwrap().nm == best_nm)
+                    .map(|m| m.target_id as usize)
+                    .collect();
+                best_asv_indices.sort();
+                best_asv_indices.dedup();
+
+                let eq_class = EquivalenceClass { asv_indices: best_asv_indices };
+                *eq_classes.lock().unwrap().entry(eq_class).or_insert(0) += 1;
+                *total_assigned.lock().unwrap() += 1;
+            });
+
+        let eq_classes = eq_classes.into_inner().unwrap();
+        let total_assigned = total_assigned.into_inner().unwrap();
+        let filtered = filtered_count.into_inner().unwrap();
+
+        log::info!("Sample {} (minimap2): {} reads assigned, {} filtered", sample_k, total_assigned, filtered);
+
+        if eq_classes.is_empty() || total_assigned == 0 {
+            continue;
+        }
+
+        let mut asv_abundances = vec![1.0 / n_asvs as f64; n_asvs];
+        let convergence_threshold = 0.01 / total_assigned as f64;
+        let mut iteration = 0;
+        const MAX_ITERATIONS: usize = 10000;
+        loop {
+            iteration += 1;
+            let mut new_abundances = vec![0.0f64; n_asvs];
+            for (eq_class, count) in &eq_classes {
+                let denom: f64 = eq_class.asv_indices.iter().map(|&i| asv_abundances[i]).sum();
+                if denom > 0.0 {
+                    for &asv_idx in &eq_class.asv_indices {
+                        new_abundances[asv_idx] += (*count as f64) * asv_abundances[asv_idx] / denom;
+                    }
+                }
+            }
+            let total: f64 = new_abundances.iter().sum();
+            if total > 0.0 {
+                for a in new_abundances.iter_mut() { *a /= total_assigned as f64; }
+            }
+            let max_change = asv_abundances.iter().zip(new_abundances.iter())
+                .map(|(o, n)| (o - n).abs()).fold(0.0, f64::max);
+            asv_abundances = new_abundances;
+            if max_change < convergence_threshold || iteration >= MAX_ITERATIONS { break; }
+        }
+
+        for asv_idx in 0..n_asvs {
+            result[asv_idx][sample_k] = (asv_abundances[asv_idx] * total_assigned as f64).round() as usize;
+        }
+    }
+
+    result
+}
 
 // Check for within-ASV heterogeneity by analyzing 50bp blocks of aligned reads
 // Main entry point that processes all ASVs in parallel

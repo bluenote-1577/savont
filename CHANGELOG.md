@@ -2,6 +2,10 @@
 
 All notable changes to savont will be documented in this file.
 
+## [0.6.0] - 2026-6-14
+
+- Added support for pooling samples during `savont asv` with `--pooled-samples`. 
+
 ## [0.5.1] - 2026-6-14
 
 - Added a way to autodetect samples with low polymorphism. In this case, we don't proceed with SNPmer clustering and just proceed with k-mer clusters + polishing.

@@ -72,6 +72,13 @@ pub struct ClusterArgs {
     #[arg(long, default_value_t = false, help_heading = CLI_HEADINGS[5])]
     pub rrna_operon: bool,
 
+    /// Per-sample quantification: treat each input file as a distinct sample.
+    /// Reads are pooled for ASV calling; depths are quantified per file.
+    #[arg(long, default_value_t=false, help_heading = "Multi-sample pooling")]
+    pub pooled_samples: bool,
+
+
+
     /// K-mer sampling rate: select 1 out of every C k-mers (higher = faster, less memory, slightly less sensitive)
     #[arg(short, long, default_value = "11", help_heading = CLI_HEADINGS[0], hide = true)]
     pub c: usize,
@@ -142,7 +149,7 @@ pub struct ClusterArgs {
     #[arg(long, default_value_t=false, help_heading = CLI_HEADINGS[2])]
     pub low_polymorphism: bool,
 
-    /// K-mer size for clustering (must be odd and < 24)
+        /// K-mer size for clustering (must be odd and < 24)
     #[arg(short, long, default_value = "17", help_heading = CLI_HEADINGS[1], hide = true)]
     pub kmer_size: usize,
 

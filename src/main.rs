@@ -148,17 +148,37 @@ fn run_cluster(args: &cli::ClusterArgs, cli_args: &cli::Cli) {
     // Write final consensus sequences after EM refinement
     let output_dir = std::path::PathBuf::from(&args.output_dir);
     let final_fasta = output_dir.join(ASV_FILE);
+
+    // Per-sample quantification (--pooled-samples)
+    let sample_names_owned: Vec<String> = args.input_files.iter()
+        .map(|f| Path::new(f).file_stem().and_then(|s| s.to_str()).unwrap_or("sample").to_string())
+        .collect();
+    if args.pooled_samples && args.input_files.len() > 1 {
+        log::info!("=== STAGE 7b: Per-sample quantification for {} samples ===", args.input_files.len());
+        let n_samples = args.input_files.len();
+        let asv_fasta_for_per_sample = temp_dir.join("final_asvs_for_em.fasta");
+        let per_sample = alignment::compute_per_sample_depths(
+            &twin_reads, n_samples, &consensuses, &kmer_info, &args, &asv_fasta_for_per_sample,
+        );
+        for (i, c) in consensuses.iter_mut().enumerate() {
+            c.per_sample_depths = per_sample[i].clone();
+        }
+        log::info!("Per-sample quantification complete");
+    }
+
     alignment::write_consensus_fasta(&consensuses, &final_fasta, "final")
         .expect(format!("Failed to write {}", ASV_FILE).as_str());
     log::info!("Wrote {} final consensus sequences to {}", consensuses.len(), ASV_FILE);
 
     // Write QIIME2-compatible feature table
-    let sample_name = Path::new(&args.input_files[0])
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("sample");
+    let sample_name_refs: Vec<&str> = sample_names_owned.iter().map(|s| s.as_str()).collect();
+    let feature_table_sample_names: &[&str] = if args.pooled_samples && args.input_files.len() > 1 {
+        &sample_name_refs
+    } else {
+        &sample_name_refs[..1]
+    };
     let feature_table = output_dir.join("feature-table.tsv");
-    write_feature_table(&consensuses, &feature_table, sample_name)
+    write_feature_table(&consensuses, &feature_table, feature_table_sample_names)
         .expect("Failed to write feature-table.tsv");
     log::info!("Wrote feature-table.tsv (QIIME2-compatible)");
 
@@ -356,15 +376,21 @@ fn my_own_format(
 fn write_feature_table(
     consensuses: &[types::ConsensusSequence],
     path: &Path,
-    sample_name: &str,
+    sample_names: &[&str],
 ) -> std::io::Result<()> {
     use std::io::Write;
     let mut f = std::fs::File::create(path)?;
     writeln!(f, "# Constructed from savont")?;
-    writeln!(f, "#OTU ID\t{}", sample_name)?;
+    writeln!(f, "#OTU ID\t{}", sample_names.join("\t"))?;
     for (i, c) in consensuses.iter().enumerate() {
-        let depth = c.depth + c.appended_depth;
-        writeln!(f, "final_consensus_{}_depth_{}\t{}", i, depth, depth)?;
+        if c.per_sample_depths.is_empty() {
+            let depth = c.depth + c.appended_depth;
+            writeln!(f, "final_consensus_{}_depth_{}\t{}", i, depth, depth)?;
+        } else {
+            let depth_str: Vec<String> = c.per_sample_depths.iter().map(|d| d.to_string()).collect();
+            let otu_id = format!("final_consensus_{}_depth_{}", i, depth_str.join("-"));
+            writeln!(f, "{}\t{}", otu_id, depth_str.join("\t"))?;
+        }
     }
     Ok(())
 }

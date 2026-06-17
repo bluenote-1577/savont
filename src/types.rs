@@ -184,6 +184,9 @@ pub struct ConsensusSequence {
     pub ambig_read_map_count: Option<usize>,
 
     pub num_map_leq_10nm: Option<usize>,
+
+    /// Per-sample depths from --pooled-samples mode; empty in single-sample mode.
+    pub per_sample_depths: Vec<usize>,
 }
 
 impl ConsensusSequence {
@@ -201,6 +204,7 @@ impl ConsensusSequence {
             unambig_best_read_map_count: None,
             ambig_read_map_count: None,
             num_map_leq_10nm: None,
+            per_sample_depths: Vec::new(),
         }
     }
 
@@ -403,6 +407,8 @@ pub struct TwinRead {
     pub outer: bool,
     pub snpmer_id_threshold: Option<f64>,
     pub lsh_signatures: Vec<Option<u64>>,
+    /// 0-based index of the input file this read came from (for --pooled-samples)
+    pub file_idx: u32,
 }
 
 
