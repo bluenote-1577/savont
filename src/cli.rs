@@ -37,9 +37,9 @@ pub enum Commands {
     #[command(name = "sintax")]
     Sintax(SintaxArgs),
 
-    /// Merge ASV profiles and taxonomic tables from multiple savont output directories
-    #[command(name = "merge")]
-    Merge(MergeArgs),
+    /// Export ASV results to QIIME2-compatible format + combine multiple savont outputs by dereplicating ASVs.
+    #[command(name = "export")]
+    Export(ExportArgs),
 }
 
 #[derive(Parser, Debug, Clone)]
@@ -262,13 +262,13 @@ pub struct SintaxArgs {
 }
 
 #[derive(Parser, Debug, Clone)]
-pub struct MergeArgs {
+pub struct ExportArgs {
     /// Input directories containing savont asv (and optionally classify/sintax) output.
     /// Each directory must contain final_asvs.fasta.
     #[arg(short, long, required = true, num_args = 1..)]
     pub input_dirs: Vec<String>,
 
-    /// Output directory for merged results
+    /// Output directory for exported results
     #[arg(short, long, required = true)]
     pub output_dir: String,
 
@@ -276,7 +276,7 @@ pub struct MergeArgs {
     #[arg(long, default_value_t = false)]
     pub no_fuzzy: bool,
 
-    /// Override auto-detected sample names (must supply exactly one label per --input-dirs entry).
+    /// Override auto-detected sample names (# of labels has to match the total # of samples).
     /// Useful when the read filename embedded in the feature table is ambiguous.
     #[arg(long, num_args = 1.., value_name = "LABEL")]
     pub relabel: Option<Vec<String>>,

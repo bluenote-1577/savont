@@ -8,13 +8,19 @@ use std::path::Path;
 
 // ── sequence hashing ─────────────────────────────────────────────────────────
 
-fn seq_hash(seq: &[u8]) -> String {
-    // djb2 — deterministic, no external dependency
+fn djb2_hash(seq: &[u8]) -> u64 {
     let mut h: u64 = 5381;
     for &b in seq {
         h = h.wrapping_mul(33).wrapping_add(b.to_ascii_uppercase() as u64);
     }
-    format!("{:016x}", h)
+    h
+}
+
+fn seq_hash(seq: &[u8]) -> String {
+    let fwd = djb2_hash(seq);
+    let rc_seq = crate::utils::reverse_complement(seq);
+    let rev = djb2_hash(&rc_seq);
+    format!("{:016x}", fwd.min(rev))
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -120,7 +126,6 @@ fn write_feature_table(
     path: &Path,
 ) -> std::io::Result<()> {
     let mut f = std::fs::File::create(path)?;
-    writeln!(f, "# Constructed from savont merge")?;
     write!(f, "#OTU ID")?;
     for s in sample_names { write!(f, "\t{}", s)?; }
     writeln!(f)?;
@@ -332,7 +337,7 @@ fn fuzzy_merge_table(
 
 // ── public entry point ────────────────────────────────────────────────────────
 
-pub fn merge(args: &cli::MergeArgs) {
+pub fn export(args: &cli::ExportArgs) {
     let output_dir = Path::new(&args.output_dir);
     std::fs::create_dir_all(output_dir).expect("Failed to create output directory");
 
@@ -496,7 +501,7 @@ pub fn merge(args: &cli::MergeArgs) {
     log::info!("Wrote {}", taxon_counts_path.display());
 
     log::info!(
-        "Merge complete. To import into QIIME2:\n\
+        "To import into QIIME2:\n\
          \n\
          # Feature table\n\
          biom convert -i {out}/merged_feature_table.tsv -o feature-table.biom --table-type='OTU table' --to-hdf5\n\
@@ -515,6 +520,7 @@ pub fn merge(args: &cli::MergeArgs) {
            --o-visualization taxa-bar-plots.qzv\\\n",
         out = out,
     );
+    log::info!("Export complete.");
 }
 
 // ── unit tests ────────────────────────────────────────────────────────────────
@@ -544,17 +550,25 @@ mod tests {
         assert_eq!(seq_hash(b"ACGT"), seq_hash(b"acgt"));
     }
 
+    #[test]
+    fn test_seq_hash_rc_canonical() {
+        let fwd = b"ACGTTGCAACGT";
+        let rc = crate::utils::reverse_complement(fwd);
+        assert_eq!(seq_hash(fwd), seq_hash(&rc),
+            "seq_hash must return the same value for a sequence and its reverse complement");
+    }
+
     // ── depth_from_header ─────────────────────────────────────────────────────
 
     #[test]
     fn test_depth_from_header_normal() {
-        assert_eq!(depth_from_header("final_consensus_0_depth_42"), 42);
-        assert_eq!(depth_from_header(">final_consensus_0_depth_42"), 42);
+        assert_eq!(depth_from_header_total("final_consensus_0_depth_42"), 42);
+        assert_eq!(depth_from_header_total(">final_consensus_0_depth_42"), 42);
     }
 
     #[test]
     fn test_depth_from_header_missing() {
-        assert_eq!(depth_from_header("some_header_no_number"), 0);
+        assert_eq!(depth_from_header_total("some_header_no_number"), 0);
     }
 
     // ── compute_minimizers ────────────────────────────────────────────────────

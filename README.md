@@ -67,18 +67,36 @@ mamba install -c bioconda savont
 
 ## Quick start for trimmed full-length 16S amplicons
 
+#### Step 1: get ASVs from primer/adapter trimmed reads
+
+You can either run savont in single sample mode or pool samples together. See [documentation on multi-sample profiling](#multi-sample-savont-workflow).
+
 ```sh
 # generate 16S ASVs for ONT / HiFi after cutadapt
 savont asv 16s_full-length_trimmed.fastq.gz -o savont-out -t 20 (optional: --hifi)
 
+# OR pool samples, get shared ASVs, quantify each sample independently
+savont asv --pooled-samples sample1.fq.gz sample2.fq.gz  ...
+```
+
+#### Step 2: download databases and classify ASVs
+
+```sh
 # download Greengenes, EMU, or silva databases
 savont download --location /path/databases --dbs greengenes2-2024.09 emu-1 silva-138.2
 
 # classify against any database
 savont classify -i savont-out -d /path/databases/emu-1 -t 20
+```
 
-# merge multiple savont outputs --> feeds into QIIME2 (optional)
-savont merge -i savont-out1 savont-out2 -o merged_output
+#### Step 3: export results to QIIME2-parseable formats (optional)
+
+```sh
+# export a single run to QIIME2-compatible outputs
+savont export -i savont-out -o export_output
+
+# or combine multiple runs into one merged export
+savont export -i savont-out1 savont-out2 -o export_output
 ```
 
 # Full subcommand guide
@@ -107,15 +125,25 @@ savont asv amplicons.fastq.gz -o savont-out -t 20 --min-read-length 1600 --max-r
 ls savont-out/final_asvs.fasta
 ```
 
+#### Multi-sample savont workflow
+
+You can either
+
+1. Run savont on multiple samples independently and do `savont export` to dereplicate ASVs and merge (see below). 
+
+2. Or, you can pool samples through `savont asv --pooled-samples sample1.fq sample2.fq ...`. This runs ASV detection on the concatenation of all samples, but sample-by-sample abundance quantification.
+
+Pooling may allow recovery of low abundance ASVs and prevent cross-sample ASV splitting ([see here](https://github.com/bluenote-1577/savont/issues/2)). However, pooling is more computationally expensive, both in terms of memory and speed. 
+
+
 ### ASV output
 
 The `savont asv` command produces:
 
 1. **final_asvs.fasta** - Final ASV sequences (high-quality, chimera-filtered)
 2. **feature-table.tsv** - QIIME2-compatible feature table (ASV × sample read counts)
-3. **final_clusters.tsv** - Cluster assignments mapping reads to ASVs
+3. **final_clusters.tsv** - Cluster assignments _approximately_ mapping reads to ASVs
 4. **temp/** - Directory containing intermediate files
-
 
 ## Taxonomic profiling against a reference database
 
@@ -124,7 +152,7 @@ Savont can also classify ASVs and generate a taxonomic profile with abundances. 
 - **`savont classify`** — minimap2 alignment against database with species- and genus-level output (better for species level). Uses identity thresholds for taxonomic assignment (thresholds from [Yarza et al.](https://www.nature.com/articles/nrmicro3330))
 - **`savont sintax`** — SINTAX k-mer bootstrap; genus-level only (better for unknown taxa)
 
-### Step 2: Download a reference database
+### Step 1: Download a reference database
 
 ```sh
 # Download one or more databases (emu-1, silva-138.2, greengenes2-2024.09)
@@ -136,22 +164,19 @@ savont download --location /path/databases --dbs greengenes2-2024.09
 savont download --location /path/databases --dbs emu-1 silva-138.2 
 ```
 
-### Step 3a: Classify ASVs with alignment (`savont classify`)
+### Step 2a: Classify ASVs with alignment (`savont classify`)
 
 ```sh
 # Classify using any downloaded database (type is auto-detected)
 savont classify -i savont-out -d databases/emu-1 -t 20
 savont classify -i savont-out -d databases/silva-138.2 -t 20
 
-# Write to a separate output directory
-savont classify -i savont-out -d databases/emu-1 -o classification-out -t 20
-
 # Adjust identity thresholds
 savont classify -i savont-out -d databases/emu-1 \
     --species-threshold 99.9 --genus-threshold 90.0
 ```
 
-### Step 3b: Classify ASVs with SINTAX (`savont sintax`)
+### Step 2b: Classify ASVs with SINTAX (`savont sintax`)
 
 `savont sintax` uses 12-mer bootstrap resampling (100 iterations by default) to assign genus-level taxonomy with per-rank confidence scores.
 
@@ -177,9 +202,10 @@ abundance       species         genus   family  order   class   phylum  clade   
 0.23456         Staphylococcus_aureus   Staphylococcus  Staphylococcaceae       ...
 ```
 
-- `abundance` - Relative abundance estimated by EM algorithm
-- `tax_id` - Taxonomic identifier
+- `abundance` - Relative abundance estimated by mappings and ASV depths
 - Full taxonomic lineage from species to superkingdom
+
+**Note**: `*_abundance.tsv` has extra per-sample abundances if `--pooled-samples` was specified during `savont asv`. 
 
 #### 2. asv_mappings.tsv
 
@@ -191,7 +217,7 @@ final_consensus_0_depth_5936    5936    99.67   5   29466   Veillonella parvula 
 final_consensus_1_depth_3081    3081    99.27   11  29466   Veillonella parvula Veillonella Veillonellaceae Veillonellales  Negativicutes   Bacillota           Bacteria    29466:emu_db:36873
 ```
 
-All taxonomic ranks from species to superkingdom are included. Unclassified ASVs have `UNCLASSIFIED` in every rank column.
+All taxonomic ranks from species to superkingdom are included. Lower taxonomic ranks may be `UNCLASSIFIED` if the alignment identity is low. Unmapped ASVs have `UNCLASSIFIED` in every rank column.
 
 ### Classification Output (`savont sintax`)
 
@@ -205,50 +231,54 @@ final_consensus_0_depth_5936    5936    0.000   0.980   0.990   0.995   0.999   
 Ranks below `--min-bootstrap` are reported as `UNCLASSIFIED`.
 
 
-## Merge multiple samples (`savont merge`)
+## Export to QIIME2 format (`savont export`)
 
-When you have run `savont asv` (and optionally `classify`/`sintax`) on multiple samples separately, `savont merge` combines them into a single set of outputs. 
+`savont export` converts savont output into QIIME2-importable files. It works on a single run directory or combines multiple directories into one merged profile.
 
-ASVs across samples are matched by exact sequence hash. By default, savont also **fuzzy-merges** ASVs with identical sequences but trimmed to slightly different lengths across runs. 
+ASVs across directories are matched by exact sequence hash. By default, savont also **fuzzy-merges** ASVs with identical sequences but trimmed to slightly different lengths across runs.
+
 
 ```sh
-# Merge two samples
-savont merge -i sample1-out sample2-out -o merged-out
+# Export a single run
+savont export -i savont-out -o export-out
 
-# Merge many samples and give them meaningful names
-savont merge \
+# Combine multiple runs
+savont export -i sample1-out sample2-out -o export-out
+
+# Combine many runs and give them meaningful names
+savont export \
     -i run1/savont-out run2/savont-out run3/savont-out \
-    -o merged-out \
+    -o export-out \
     --relabel SampleA SampleB SampleC
 ```
 
 > [!NOTE]
-> Make sure to use `--relabel` if you have duplicate sample names. 
+> Make sure to use `--relabel` if you have duplicate sample names.
 
-#### Merge outputs
+#### Export outputs
 
 1. **merged_feature_table.tsv** — QIIME2-compatible feature table; rows are hash-keyed ASVs, columns are samples
 2. **merged_rep_seqs.fasta** — representative sequences for all merged ASVs
 3. **merged_asv_taxonomy.tsv** — ASV-level taxonomy (Feature ID → lineage); **only written if `savont classify` or `savont sintax` was run on any input directory**
 4. **merged_taxon_counts.tsv** — human-readable taxon count table; rows are lineage strings (`Bacteria;Firmicutes;...`), columns are sample counts; useful for quick inspection without QIIME2
 
-#### Importing merged outputs into QIIME2 + stacked bar plot
+#### Importing exported outputs into QIIME2 + stacked bar plot
 
 ```sh
 # Feature table
-biom convert -i merged-out/merged_feature_table.tsv \
+biom convert -i export-out/merged_feature_table.tsv \
     -o feature-table.biom --table-type='OTU table' --to-hdf5
 qiime tools import --type 'FeatureTable[Frequency]' \
     --input-path feature-table.biom --output-path feature-table.qza
 
 # Representative sequences
 qiime tools import --type 'FeatureData[Sequence]' \
-    --input-path merged-out/merged_rep_seqs.fasta --output-path rep-seqs.qza
+    --input-path export-out/merged_rep_seqs.fasta --output-path rep-seqs.qza
 
 # Taxonomy (if classify/sintax was run)
 qiime tools import --type 'FeatureData[Taxonomy]' \
     --input-format HeaderlessTSVTaxonomyFormat \
-    --input-path merged-out/merged_asv_taxonomy.tsv --output-path taxonomy.qza
+    --input-path export-out/merged_asv_taxonomy.tsv --output-path taxonomy.qza
 
 qiime taxa barplot --i-table feature-table.qza --i-taxonomy taxonomy.qza \
     --o-visualization taxa-bar-plots.qzv

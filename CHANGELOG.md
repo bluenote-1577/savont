@@ -4,7 +4,10 @@ All notable changes to savont will be documented in this file.
 
 ## [0.6.0] - 2026-6-14
 
+- Renamed `savont merge` to `savont export` to better reflect its dual use: exporting a single run to QIIME2 format and combining multiple runs.
 - Added support for pooling samples during `savont asv` with `--pooled-samples`. 
+- Fixed a bug with `savont export` (formerly `savont merge`) that failed to merge reverse complemented sequences. 
+- Made the cluster IDs in the TSV files more transparent and correspond to the main final_asvs.fasta file. 
 
 ## [0.5.1] - 2026-6-14
 

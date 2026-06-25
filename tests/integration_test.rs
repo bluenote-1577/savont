@@ -318,7 +318,7 @@ fn test_merge_feature_table() {
     Command::cargo_bin("savont")
         .unwrap()
         .args([
-            "merge",
+            "export",
             "-i", tmp1.path().to_str().unwrap(), tmp2.path().to_str().unwrap(),
             "-o", merge_out.path().to_str().unwrap(),
         ])
@@ -331,15 +331,14 @@ fn test_merge_feature_table() {
 
     let content = fs::read_to_string(&ft_path).unwrap();
     let lines: Vec<&str> = content.lines().collect();
-    assert!(lines.len() >= 3, "feature table has fewer than 3 lines");
-    assert!(lines[0].starts_with("# Constructed from savont merge"), "missing comment header");
-    assert!(lines[1].starts_with("#OTU ID\t"), "header row should start with #OTU ID");
+    assert!(lines.len() >= 2, "feature table has fewer than 2 lines");
+    assert!(lines[0].starts_with("#OTU ID\t"), "header row should start with #OTU ID");
 
-    let n_cols = lines[1].split('\t').count();
+    let n_cols = lines[0].split('\t').count();
     assert_eq!(n_cols, 3, "expected #OTU ID + 2 sample columns, got {}", n_cols);
 
     // All data rows: 3 tab-separated fields, last two are non-negative integers.
-    for line in &lines[2..] {
+    for line in &lines[1..] {
         let fields: Vec<&str> = line.split('\t').collect();
         assert_eq!(fields.len(), 3, "data row has wrong column count: {:?}", line);
         fields[1].parse::<u64>().expect("sample-1 count is not an integer");
@@ -350,7 +349,7 @@ fn test_merge_feature_table() {
     let rs_path = merge_out.path().join("merged_rep_seqs.fasta");
     assert!(rs_path.exists(), "merged_rep_seqs.fasta not created");
 
-    let ft_ids: HashSet<String> = lines[2..].iter()
+    let ft_ids: HashSet<String> = lines[1..].iter()
         .map(|l| l.split('\t').next().unwrap().to_string())
         .collect();
     let rs_ids: HashSet<String> = fs::read_to_string(&rs_path)
@@ -362,7 +361,7 @@ fn test_merge_feature_table() {
     assert_eq!(ft_ids, rs_ids, "feature table ASV IDs must match rep_seqs IDs");
 
     // --- at least some ASVs are present in both samples ---
-    let shared = lines[2..].iter().filter(|l| {
+    let shared = lines[1..].iter().filter(|l| {
         let f: Vec<&str> = l.split('\t').collect();
         f[1].parse::<u64>().unwrap_or(0) > 0 && f[2].parse::<u64>().unwrap_or(0) > 0
     }).count();
@@ -395,7 +394,7 @@ fn test_merge_with_classify() {
     Command::cargo_bin("savont")
         .unwrap()
         .args([
-            "merge",
+            "export",
             "-i", tmp1.path().to_str().unwrap(), tmp2.path().to_str().unwrap(),
             "-o", merge_out.path().to_str().unwrap(),
         ])
@@ -407,8 +406,8 @@ fn test_merge_with_classify() {
     assert!(ft_path.exists(), "merged_feature_table.tsv not created");
     let ft_content = fs::read_to_string(&ft_path).unwrap();
     let ft_lines: Vec<&str> = ft_content.lines().collect();
-    assert!(ft_lines[1].starts_with("#OTU ID\t"), "feature table header malformed");
-    assert_eq!(ft_lines[1].split('\t').count(), 3, "expected 2 sample columns");
+    assert!(ft_lines[0].starts_with("#OTU ID\t"), "feature table header malformed");
+    assert_eq!(ft_lines[0].split('\t').count(), 3, "expected 2 sample columns");
 
     // ASV taxonomy file must exist with correct header
     let asv_tax_path = merge_out.path().join("merged_asv_taxonomy.tsv");
@@ -445,7 +444,7 @@ fn test_merge_with_sintax() {
     Command::cargo_bin("savont")
         .unwrap()
         .args([
-            "merge",
+            "export",
             "-i", tmp1.path().to_str().unwrap(), tmp2.path().to_str().unwrap(),
             "-o", merge_out.path().to_str().unwrap(),
         ])
@@ -532,7 +531,7 @@ fn test_merge_with_silva() {
     Command::cargo_bin("savont")
         .unwrap()
         .args([
-            "merge",
+            "export",
             "-i", tmp1.path().to_str().unwrap(), tmp2.path().to_str().unwrap(),
             "-o", merge_out.path().to_str().unwrap(),
         ])
@@ -559,7 +558,7 @@ fn test_merge_with_silva() {
 
     // Feature table and rep seqs must have matching IDs
     let ft = fs::read_to_string(merge_out.path().join("merged_feature_table.tsv")).unwrap();
-    let ft_ids: HashSet<String> = ft.lines().skip(2)
+    let ft_ids: HashSet<String> = ft.lines().skip(1)
         .map(|l| l.split('\t').next().unwrap().to_string())
         .collect();
     let tax_ids: HashSet<String> = asv_tax_lines[1..].iter()
@@ -622,7 +621,7 @@ fn test_merge_with_greengenes2() {
     Command::cargo_bin("savont")
         .unwrap()
         .args([
-            "merge",
+            "export",
             "-i", tmp1.path().to_str().unwrap(), tmp2.path().to_str().unwrap(),
             "-o", merge_out.path().to_str().unwrap(),
         ])
@@ -636,7 +635,7 @@ fn test_merge_with_greengenes2() {
 
     // ASV taxonomy: IDs must match feature table, classified lineages must have semicolons
     let ft = fs::read_to_string(merge_out.path().join("merged_feature_table.tsv")).unwrap();
-    let ft_ids: HashSet<String> = ft.lines().skip(2)
+    let ft_ids: HashSet<String> = ft.lines().skip(1)
         .map(|l| l.split('\t').next().unwrap().to_string())
         .collect();
 
@@ -651,4 +650,163 @@ fn test_merge_with_greengenes2() {
         .filter(|l| l.split('\t').nth(1).map_or(false, |t| t.contains(';')))
         .count();
     assert!(classified > 0, "no classified lineages (with semicolons) in merged_asv_taxonomy");
+}
+
+// ── pooled-samples tests ──────────────────────────────────────────────────────
+
+/// Run `savont asv --pooled-samples` on both zymo replicates and verify:
+/// - FASTA headers carry dash-separated per-sample depths
+/// - feature-table.tsv has exactly 2 sample columns with integer depths
+#[test]
+fn test_pooled_samples_asv() {
+    let tmp = TempDir::new().unwrap();
+    Command::cargo_bin("savont")
+        .unwrap()
+        .args([
+            "asv", "--pooled-samples", READS_FQ, READS_FQ_2,
+            "-o", tmp.path().to_str().unwrap(),
+            "-t", "4",
+            "--min-cluster-size", "5",
+        ])
+        .assert()
+        .success();
+
+    // FASTA headers must use dash-separated depths in pooled mode
+    let fasta_path = tmp.path().join("final_asvs.fasta");
+    assert!(fasta_path.exists(), "final_asvs.fasta not created");
+    let fasta = fs::read_to_string(&fasta_path).unwrap();
+    let headers: Vec<&str> = fasta.lines().filter(|l| l.starts_with('>')).collect();
+    assert!(!headers.is_empty(), "no ASVs produced by --pooled-samples");
+    for h in &headers {
+        let depth_part = h.split("_depth_").nth(1)
+            .unwrap_or_else(|| panic!("header missing _depth_: {}", h));
+        assert!(
+            depth_part.contains('-'),
+            "pooled header should have dash-separated depths: {}", h
+        );
+    }
+
+    // feature-table.tsv: header row + 2 sample columns + integer depths in each data row
+    let ft_path = tmp.path().join("feature-table.tsv");
+    assert!(ft_path.exists(), "feature-table.tsv not created");
+    let ft = fs::read_to_string(&ft_path).unwrap();
+    let ft_lines: Vec<&str> = ft.lines().collect();
+    assert!(ft_lines[0].starts_with("#OTU ID\t"), "feature table header malformed");
+    assert_eq!(
+        ft_lines[0].split('\t').count(), 3,
+        "expected #OTU ID + 2 sample columns in pooled feature table"
+    );
+    for line in &ft_lines[1..] {
+        let fields: Vec<&str> = line.split('\t').collect();
+        assert_eq!(fields.len(), 3, "data row has wrong column count: {:?}", line);
+        fields[1].parse::<u64>().expect("sample-1 depth is not an integer");
+        fields[2].parse::<u64>().expect("sample-2 depth is not an integer");
+    }
+}
+
+/// Run `savont classify` (EMU) on a `--pooled-samples` run and verify that
+/// species/genus abundance tables are produced and contain known Zymo genera.
+/// Soft-skips if EMU database is unavailable.
+#[test]
+fn test_pooled_samples_classify() {
+    let Some(db_dir) = emu_db() else {
+        eprintln!("Skipping test_pooled_samples_classify: EMU database unavailable");
+        return;
+    };
+    let db_str = db_dir.to_str().unwrap();
+
+    let tmp = TempDir::new().unwrap();
+    Command::cargo_bin("savont")
+        .unwrap()
+        .args([
+            "asv", "--pooled-samples", READS_FQ, READS_FQ_2,
+            "-o", tmp.path().to_str().unwrap(),
+            "-t", "4",
+            "--min-cluster-size", "5",
+        ])
+        .assert()
+        .success();
+
+    Command::cargo_bin("savont")
+        .unwrap()
+        .args(["classify", "-i", tmp.path().to_str().unwrap(), "-d", db_str, "-t", "4"])
+        .assert()
+        .success();
+
+    let species_path = tmp.path().join("species_abundance.tsv");
+    assert!(species_path.exists(), "species_abundance.tsv not created");
+    let genus_path = tmp.path().join("genus_abundance.tsv");
+    assert!(genus_path.exists(), "genus_abundance.tsv not created");
+
+    // Both tables should have 2 sample columns (one per pooled input file)
+    for path in [&species_path, &genus_path] {
+        let content = fs::read_to_string(path).unwrap();
+        let header = content.lines().next().unwrap_or("");
+        // abundance + 2 sample names + taxonomy columns — at least 4 fields total
+        assert!(
+            header.split('\t').count() >= 4,
+            "{} header should have ≥4 columns for pooled classify: {}",
+            path.display(), header
+        );
+    }
+
+    // At least one known Zymo genus must appear
+    let species = fs::read_to_string(&species_path).unwrap();
+    let known = ["Listeria", "Pseudomonas", "Escherichia", "Salmonella", "Staphylococcus"];
+    assert!(
+        known.iter().any(|g| species.contains(g)),
+        "none of the expected Zymo genera found in pooled species_abundance.tsv"
+    );
+}
+
+/// Run `savont export` on a `--pooled-samples` output directory and verify that
+/// the merged feature table expands to 2 columns and IDs match rep seqs.
+#[test]
+fn test_pooled_samples_export() {
+    let tmp = TempDir::new().unwrap();
+    Command::cargo_bin("savont")
+        .unwrap()
+        .args([
+            "asv", "--pooled-samples", READS_FQ, READS_FQ_2,
+            "-o", tmp.path().to_str().unwrap(),
+            "-t", "4",
+            "--min-cluster-size", "5",
+        ])
+        .assert()
+        .success();
+
+    let export_out = TempDir::new().unwrap();
+    Command::cargo_bin("savont")
+        .unwrap()
+        .args([
+            "export",
+            "-i", tmp.path().to_str().unwrap(),
+            "-o", export_out.path().to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    // merged_feature_table.tsv must carry 2 sample columns (expanded from pooled input)
+    let ft_path = export_out.path().join("merged_feature_table.tsv");
+    assert!(ft_path.exists(), "merged_feature_table.tsv not created");
+    let ft = fs::read_to_string(&ft_path).unwrap();
+    let ft_lines: Vec<&str> = ft.lines().collect();
+    assert!(ft_lines[0].starts_with("#OTU ID\t"), "merged feature table header malformed");
+    assert_eq!(
+        ft_lines[0].split('\t').count(), 3,
+        "expected 2 sample columns when exporting a pooled-samples directory"
+    );
+
+    // ASV IDs in feature table and rep seqs must agree
+    let ft_ids: HashSet<String> = ft_lines[1..].iter()
+        .map(|l| l.split('\t').next().unwrap().to_string())
+        .collect();
+    let rs_path = export_out.path().join("merged_rep_seqs.fasta");
+    assert!(rs_path.exists(), "merged_rep_seqs.fasta not created");
+    let rs_ids: HashSet<String> = fs::read_to_string(&rs_path).unwrap()
+        .lines()
+        .filter(|l| l.starts_with('>'))
+        .map(|l| l[1..].split_whitespace().next().unwrap().to_string())
+        .collect();
+    assert_eq!(ft_ids, rs_ids, "feature table IDs must match rep_seqs IDs in pooled export");
 }

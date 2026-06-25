@@ -40,8 +40,8 @@ fn main() {
         cli::Commands::Sintax(sintax_args) => {
             run_sintax(sintax_args, &args);
         }
-        cli::Commands::Merge(merge_args) => {
-            run_merge(merge_args, &args);
+        cli::Commands::Export(export_args) => {
+            run_export(export_args, &args);
         }
     }
 }
@@ -250,14 +250,14 @@ fn run_sintax(args: &cli::SintaxArgs, cli_args: &cli::Cli) {
     sintax::sintax(args, &db);
 }
 
-fn run_merge(args: &cli::MergeArgs, cli_args: &cli::Cli) {
+fn run_export(args: &cli::ExportArgs, cli_args: &cli::Cli) {
     let output_dir = Path::new(&args.output_dir);
     if !output_dir.exists() {
         std::fs::create_dir_all(output_dir).expect("Could not create output directory");
     }
 
     let log_spec = format!("{}", cli_args.log_level_filter().to_string());
-    let filespec = FileSpec::default().directory(output_dir).basename("savont_merge");
+    let filespec = FileSpec::default().directory(output_dir).basename("savont_export");
     let _logger_handle = flexi_logger::Logger::try_with_str(log_spec)
         .expect("Something went wrong with logging")
         .log_to_file(filespec)
@@ -271,7 +271,7 @@ fn run_merge(args: &cli::MergeArgs, cli_args: &cli::Cli) {
     log::info!("COMMAND: {}", command_args.join(" "));
     log::info!("VERSION: {}", env!("CARGO_PKG_VERSION"));
 
-    merge::merge(args);
+    merge::export(args);
 }
 
 fn run_download(args: &cli::DownloadArgs, cli_args: &cli::Cli) {
@@ -380,7 +380,6 @@ fn write_feature_table(
 ) -> std::io::Result<()> {
     use std::io::Write;
     let mut f = std::fs::File::create(path)?;
-    writeln!(f, "# Constructed from savont")?;
     writeln!(f, "#OTU ID\t{}", sample_names.join("\t"))?;
     for (i, c) in consensuses.iter().enumerate() {
         if c.per_sample_depths.is_empty() {
