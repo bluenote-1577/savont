@@ -832,7 +832,7 @@ pub fn write_consensus_fasta(
         cons_clone.decompress();
         let consensus_seq = cons_clone.decompressed_sequence.clone().unwrap();
         let start_non = consensus_seq.iter().enumerate().find(|&(_i, &b)| b != b'N').map(|(i, _)| i).unwrap_or(0);
-        let end_non = consensus_seq.iter().enumerate().rfind(|&(_i, &b)| b != b'N').map(|(i, _)| i).unwrap_or(consensus_seq.len());
+        let end_non = consensus_seq.iter().enumerate().rfind(|&(_i, &b)| b != b'N').map(|(i, _)| i + 1).unwrap_or(consensus_seq.len());
         let depth_field = if consensus.per_sample_depths.is_empty() {
             (consensus.depth + consensus.appended_depth).to_string()
         } else {
@@ -844,7 +844,7 @@ pub fn write_consensus_fasta(
         writeln!(writer, "{}", header)?;
 
         // Use decompressed sequence if available, otherwise use HPC sequence
-        let sequence = String::from_utf8_lossy(&consensus_seq[start_non..=end_non]);
+        let sequence = String::from_utf8_lossy(&consensus_seq[start_non..end_non]);
 
         writeln!(writer, "{}", sequence)?;
     }
@@ -1122,7 +1122,9 @@ pub fn analyze_pileup_consensuses(
 
     
     let low_quality_consensuses = consensuses.iter().filter(|c| lq_criteria(c, args)).map(|c| c.clone()).collect::<Vec<_>>();
-    log::info!("Low quality consensus sequences: {:?}", &low_quality_consensuses.iter().map(|c| c.id).collect::<Vec<_>>());
+    let mut lq_ids: Vec<usize> = low_quality_consensuses.iter().map(|c| c.id).collect();
+    lq_ids.sort_unstable();
+    log::info!("Low quality consensus sequences: {:?}", lq_ids);
     let low_quality_cluster_file = temp_dir.join("low_quality_clusters.tsv");
     write_clusters_tsv(&low_quality_consensuses, twin_reads, &low_quality_cluster_file, "low_quality")
         .expect("Failed to write low_quality_clusters.tsv");

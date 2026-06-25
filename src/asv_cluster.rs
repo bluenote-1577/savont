@@ -209,7 +209,8 @@ pub fn cluster_reads_by_kmers(
     }
 
     let mut clusters: Vec<Vec<usize>> = clusters_map.into_values().collect();
-    clusters.sort_by(|a, b| b.len().cmp(&a.len()));
+    clusters.sort_by(|a, b| b.len().cmp(&a.len())
+        .then_with(|| a.first().cmp(&b.first())));
 
     // Sort members within each cluster because lower IDs have better estimated accuracy
     for cluster in clusters.iter_mut(){
@@ -573,7 +574,8 @@ pub fn cluster_reads_by_snpmers(
             .filter(|c| c.len() >= args.min_cluster_size)
             .cloned()
             .collect();
-        clusters.sort_by(|a, b| b.len().cmp(&a.len()));
+        clusters.sort_by(|a, b| b.len().cmp(&a.len())
+            .then_with(|| a.first().cmp(&b.first())));
         return clusters;
     }
 
@@ -679,8 +681,11 @@ pub fn cluster_reads_by_snpmers(
             cluster_map.entry(*rep_id).or_insert_with(Vec::new).push(*read_id);
         }
 
-        let mut local_clusters: Vec<Vec<usize>> = cluster_map.into_values().collect();
-        local_clusters.sort_by(|a, b| b.len().cmp(&a.len()));
+        let mut local_clusters: Vec<Vec<usize>> = cluster_map.into_values()
+            .map(|mut c| { c.sort_unstable(); c })
+            .collect();
+        local_clusters.sort_by(|a, b| b.len().cmp(&a.len())
+            .then_with(|| a.first().cmp(&b.first())));
 
         // Remove small clusters
         log::debug!("Before size filtering: {} SNPmer clusters in k-mer cluster {}", local_clusters.len(), kmer_cluster_id);
@@ -1114,6 +1119,9 @@ fn reassign_reads_to_best_cluster(
     // Remove empty clusters
     let mut new_clusters = new_clusters.into_inner().unwrap();
     new_clusters.retain(|cluster| !cluster.is_empty() && cluster.len() >= args.min_cluster_size);
+    for c in &mut new_clusters {
+        c.sort_unstable();
+    }
     let num_reassignments = num_reassignments.into_inner().unwrap();
 
     log::trace!("Reassignment complete: {} reads reassigned to better clusters", num_reassignments);
@@ -1159,7 +1167,8 @@ fn recluster_one_round_top_n(
     }
 
     // Sort clusters by size (descending) so we merge smaller into larger
-    all_clusters.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
+    all_clusters.sort_by(|a, b| b.0.len().cmp(&a.0.len())
+        .then_with(|| a.0.first().cmp(&b.0.first())));
 
     // Merge clusters with concordant consensus representatives
     let mut cluster_merged: Vec<bool> = vec![false; all_clusters.len()];
@@ -1254,7 +1263,8 @@ fn recluster_one_round_top_n(
     }
 
     // Sort by size descending
-    merged_clusters.sort_by(|a, b| b.len().cmp(&a.len()));
+    merged_clusters.sort_by(|a, b| b.len().cmp(&a.len())
+        .then_with(|| a.first().cmp(&b.first())));
 
     (merged_clusters, num_merges)
 }
@@ -1362,7 +1372,10 @@ pub fn recluster_using_consensus_reps(
 
     // Step 3: Flatten the hierarchical structure for final output and debugging
     let mut final_clusters: Vec<Vec<usize>> = Vec::new();
-    for (_kmer_cluster_id, snpmer_clusters) in &current_clusters {
+    let mut sorted_keys: Vec<usize> = current_clusters.keys().cloned().collect();
+    sorted_keys.sort_unstable();
+    for kmer_cluster_id in sorted_keys {
+        let snpmer_clusters = &current_clusters[&kmer_cluster_id];
         for cluster in snpmer_clusters {
             if !cluster.is_empty() {
                 final_clusters.push(cluster.clone());
@@ -1371,7 +1384,8 @@ pub fn recluster_using_consensus_reps(
     }
 
     // Sort by size descending
-    final_clusters.sort_by(|a, b| b.len().cmp(&a.len()));
+    final_clusters.sort_by(|a, b| b.len().cmp(&a.len())
+        .then_with(|| a.first().cmp(&b.first())));
     final_clusters.retain(|cluster| cluster.len() >= args.min_cluster_size);
 
     log::info!("Final result: {} total clusters across {} k-mer groups", final_clusters.len(), current_clusters.len());
