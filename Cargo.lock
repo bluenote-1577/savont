@@ -1229,7 +1229,7 @@ dependencies = [
 
 [[package]]
 name = "savont"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "approx 0.4.0",
  "assert_cmd",
@@ -1369,8 +1369,7 @@ checksum = "02a8428da277a8e3a15271d79943e80ccc2ef254e78813a166a08d65e4c3ece5"
 [[package]]
 name = "spoa_rs"
 version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b0a843ed9d5c133bd8d236ec1ccfc1b37455b901dc76698336b546e253239804"
+source = "git+https://github.com/bluenote-1577/spoa-rs-v2#08e18b16211e9a251e64f70207810c068ee91529"
 dependencies = [
  "cmake",
  "cxx",

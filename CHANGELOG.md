@@ -2,6 +2,10 @@
 
 All notable changes to savont will be documented in this file.
 
+## [0.6.1] - 2026-6-29
+
+- Fixing cross-platform build issues and ISA architecture issues due to spoa-rs not having the right flags. 
+
 ## [0.6.0] - 2026-6-25
 
 - Renamed `savont merge` to `savont export` to better reflect its dual use: exporting a single run to QIIME2 format and combining multiple runs.
