@@ -47,6 +47,8 @@ Requirements:
 2. Standard linux toolchain (tar, gzip, wget, C++, gcc)
 3. cmake
 
+Installation takes a few minutes. 
+
 ```sh
 git clone https://github.com/bluenote-1577/savont
 cd savont
@@ -54,6 +56,7 @@ cd savont
 # Build and install
 cargo install --path .
 savont --help
+savont asv tests/data/ont_zymo_1000.trimmed.fq.gz -o test_dataset #takes a few seconds
 ```
 
 ### Option 2: Conda
