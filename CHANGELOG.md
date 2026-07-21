@@ -2,6 +2,11 @@
 
 All notable changes to savont will be documented in this file.
 
+## [0.6.2] - 2026-7-20
+
+- Replaced SPOA C++ bindings (`spoa_rs`) with `spoars`, a native pure-Rust POA implementation (no C++ build toolchain required)
+- Banded POA alignment is now the default for consensus generation (`--no-band` to revert to exact alignment). This makes consensus generation quite a bit faster for long amplicons. 
+
 ## [0.6.1] - 2026-6-29
 
 - Fixing cross-platform build issues and ISA architecture issues due to spoa-rs not having the right flags. 

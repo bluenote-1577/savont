@@ -195,24 +195,39 @@ fn generate_consensus_poa(
     qualities: &[Vec<u8>],
     _coverage_threshold: i32,
     _cluster_idx: usize,
+    no_band: bool,
 ) -> Vec<u8> {
+    use spoars::align::{AlignmentEngine, AlignmentType, BandConfig, Scoring, SimdEngine};
+    use spoars::graph::Graph;
+
     if sequences.is_empty() {
         return Vec::new();
     }
 
-    let mut engine = spoa_rs::AlignmentEngine::new_affine(spoa_rs::AlignmentType::kOV, 3, -8, -6, -6);
-    let mut graph = spoa_rs::Graph::new();
+    let scoring = Scoring::new(3, -8, -6, -6, 0, 0).expect("invalid SPOA scoring");
+
+    // Band = 0.1 * seq_len + |ref_len - seq_len|.  Use mean length as ref_len and the
+    // cluster's max deviation as the fixed base so one engine covers all sequences.
+    let ref_len = sequences.iter().map(|s| s.len()).sum::<usize>() / sequences.len();
+    let max_deviation = sequences.iter()
+        .map(|s| (ref_len as isize - s.len() as isize).abs() as u32)
+        .max()
+        .unwrap_or(0);
+
+    let mut engine = if no_band {
+        SimdEngine::new(AlignmentType::Overlap, scoring)
+    } else {
+        SimdEngine::banded(AlignmentType::Overlap, scoring, BandConfig { base: max_deviation, frac: 0.1 })
+    };
+    let mut graph = Graph::new();
 
     for i in 0..sequences.len() {
-        let str_seq = String::from_utf8_lossy(&sequences[i]);
-        let u32_qual = qualities[i].iter().map(|&q| q as u32).collect::<Vec<u32>>();
-        let (_score, spoa_align) = engine.align(&str_seq, &graph);
-        graph.add_alignment_with_weights(spoa_align, &str_seq, &u32_qual);
+        let u32_qual: Vec<u32> = qualities[i].iter().map(|&q| q as u32).collect();
+        let (alignment, _score) = engine.align(&sequences[i], &graph);
+        graph.add_alignment(&alignment, &sequences[i], &u32_qual).expect("add_alignment failed");
     }
 
-    let consensus = graph.generate_consensus();
-
-    return consensus.into_bytes();
+    graph.generate_consensus().into_bytes()
 }
 
 pub fn align_and_consensus(twin_reads: &[TwinRead], clusters: Vec<Vec<usize>>, args: &Cli, output_dir: &PathBuf) -> Vec<ConsensusSequence> {
@@ -370,7 +385,7 @@ pub fn align_and_consensus(twin_reads: &[TwinRead], clusters: Vec<Vec<usize>>, a
         let coverage_threshold = coverage_threshold.max(args.min_cluster_size as i32);
 
         // Generate consensus using POA (working with HPC sequences)
-        let hpc_consensus = generate_consensus_poa(&hpc_aligned_sequences, &hpc_aligned_qualities, coverage_threshold, cluster_idx);
+        let hpc_consensus = generate_consensus_poa(&hpc_aligned_sequences, &hpc_aligned_qualities, coverage_threshold, cluster_idx, args.no_band);
 
         // Compress the consensus again to ensure it's fully HPC
         let (hpc_consensus_seq, _) = utils::homopolymer_compress(&hpc_consensus, args.use_hpc);

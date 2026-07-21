@@ -4,8 +4,7 @@ use crate::taxonomy::{self, Database};
 
 const MARKER_FILE: &str = ".savont_db";
 /// Flat keyword list used by the CLI `possible_values` validator.
-/// GTDB-R232 is currently disabled because its SSU sequences are not QC'd. 
-pub const KEYWORDS: &[&str] = &["emu-1", "silva-138.2", "greengenes2-2024.09"];//, "gtdb-r232-ssu"];
+pub const KEYWORDS: &[&str] = &["emu-1", "silva-138.2", "greengenes2-2024.09"];
 
 
 /// Describes one versioned database: how to download it, load it, and extract
@@ -41,14 +40,6 @@ pub const ALL: &[DatabaseDef] = &[
         load:        Database::load_gg2,
         extract_key: taxonomy::extract_gg2_key_from_header,
     },
-    // DatabaseDef {
-    //     keyword:     KEYWORDS[3],
-    //     description: "GTDB r232 SSU rRNA",
-    //     download:    download_gtdb,
-    //     load:        Database::load_gtdb,
-    //     extract_key: taxonomy::extract_gtdb_key_from_header,
-    // },
-
 ];
 
 
@@ -163,17 +154,6 @@ fn download_silva(dest: &Path) -> Result<(), String> {
         .arg(dest.join("taxmap_slv_ssu_ref_nr_138.2.txt.gz"))
         .status()
         .map_err(|e| format!("gzip failed: {}", e))?;
-
-    Ok(())
-}
-
-fn _download_gtdb(dest: &Path) -> Result<(), String> {
-    log::info!("Downloading GTDB r232 SSU database...");
-    let url = "https://data.gtdb.aau.ecogenomic.org/releases/release232/232.0/genomic_files_all/ssu_all_r232.fna.gz";
-
-    let s = Command::new("wget").arg(url).arg("-P").arg(dest)
-        .status().map_err(|e| format!("wget failed: {}", e))?;
-    if !s.success() { return Err("wget returned non-zero for GTDB download".into()); }
 
     Ok(())
 }

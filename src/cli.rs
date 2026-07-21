@@ -177,6 +177,10 @@ pub struct ClusterArgs {
     /// Try phasing heterogeneous clusters
     #[arg(long, help_heading = CLI_HEADINGS[2], hide=true)]
     pub phase_heterogeneous: bool,
+
+    /// Use exact (unbanded) POA alignment for consensus generation; slower but handles highly variable clusters
+    #[arg(long, default_value_t = false)]
+    pub no_band: bool,
 }
 
 #[derive(Parser, Debug, Clone)]
