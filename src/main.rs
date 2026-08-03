@@ -141,6 +141,11 @@ fn run_cluster(args: &cli::ClusterArgs, cli_args: &cli::Cli) {
     log::info!("=== STAGE 7: Refining ASV depths with alignments and EM algorithm ===");
     alignment::refine_asv_depths_with_em(&twin_reads, &mut consensuses, &kmer_info, &args, &temp_dir);
     consensuses.sort_by(|a, b| b.depth.partial_cmp(&a.depth).unwrap());
+    // Rewrite the EM FASTA in the new sorted order so Stage 7b's asv_idx aligns with consensuses[].
+    // The FASTA was written inside refine_asv_depths_with_em before this sort, so without this
+    // rewrite, compute_per_sample_depths would assign per-sample counts to the wrong ASVs.
+    alignment::write_consensus_fasta(&consensuses, &temp_dir.join("final_asvs_for_em.fasta"), "em_refinement")
+        .expect("Failed to rewrite sorted EM FASTA for Stage 7b");
     log_memory_usage(true, "STAGE 7 DONE: Refined ASV depths with EM algorithm");
 
     log::info!("Final consensus count after EM refinement: {}", consensuses.len());

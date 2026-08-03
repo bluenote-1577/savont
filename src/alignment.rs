@@ -1611,7 +1611,7 @@ fn refine_asv_depths_with_minimap2(
         {
             let mut writer = mapping_file_writer.lock().unwrap();
             for &asv_idx in &best_asv_indices {
-                writeln!(writer, "{}\tasv:{}\t{}", twin_read.id, consensuses[asv_idx].id, best_nm)
+                writeln!(writer, "{}\tdebug_id:{}\t{}", twin_read.id, consensuses[asv_idx].id, best_nm)
                     .expect("Failed to write read_to_asv_mappings.tsv");
             }
         }
@@ -1885,10 +1885,9 @@ pub fn refine_asv_depths_with_em(
             for (asv_idx, mini_matches, mismatches) in best_alns.iter().take(5) {
                 writeln!(
                     mapping_file_writer,
-                    "{}\tasv:{}\t{}\t{}",
+                    "{}\tdebug_id:{}\t{}\t{}",
                     twin_read.id,
                     consensuses[*asv_idx].id,
-                   // asv_idx,
                     mismatches,
                     mini_matches
                 ).expect("Failed to write to read_to_asv_mappings.tsv");

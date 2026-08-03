@@ -2,6 +2,11 @@
 
 All notable changes to savont will be documented in this file.
 
+## [0.6.3] - 2026-8-3
+
+- Fixed a bug in `--pooled-samples` mode where per-sample read counts were assigned to the wrong ASVs. The EM FASTA (`final_asvs_for_em.fasta`) was written before a depth-based re-sort of the consensus array, so Stage 7b's ASV indices no longer matched the final consensus ordering. The FASTA is now rewritten after the sort.
+- Clarified `read_to_asv_mappings.tsv`: ASV column now uses `debug_id:N` instead of `asv:N` to make clear it refers to the internal debug ID, not the final `final_consensus_N` number.
+
 ## [0.6.2] - 2026-7-20
 
 - Replaced SPOA C++ bindings (`spoa_rs`) with `spoars`, a native pure-Rust POA implementation (no C++ build toolchain required)
