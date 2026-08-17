@@ -281,14 +281,6 @@ pub fn align_and_consensus(twin_reads: &[TwinRead], clusters: Vec<Vec<usize>>, a
         let mut lengths_and_i: Vec<(_,_)> = sequences.iter().enumerate().map(|(i, seq)| (seq.len(), i)).collect();
         lengths_and_i.sort_by_key(|k| k.0);
 
-        // Check if we should use hierarchical consensus (for large clusters)
-        // Rank all sequences by quality-weighted identity to this seed
-        let mut avg_qual_and_i: Vec<(_,_)> = avg_quals.iter().enumerate()
-            .map(|(i, avg)| (*avg, i))
-            .collect();
-        avg_qual_and_i.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
-
-
         // Standard consensus for smaller clusters (<= 100 sequences)
         let mut avg_qual_and_i: Vec<(_,_)> = avg_quals.iter().enumerate().map(|(i, avg)| (*avg, i)).collect();
         avg_qual_and_i.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap());

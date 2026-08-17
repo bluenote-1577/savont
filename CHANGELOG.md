@@ -2,6 +2,10 @@
 
 All notable changes to savont will be documented in this file.
 
+## [0.6.4] - 2026-8-17
+
+- Added the UNITE database for ITS classification. 
+
 ## [0.6.3] - 2026-8-3
 
 - Fixed a bug in `--pooled-samples` mode where per-sample read counts were assigned to the wrong ASVs. The EM FASTA (`final_asvs_for_em.fasta`) was written before a depth-based re-sort of the consensus array, so Stage 7b's ASV indices no longer matched the final consensus ordering. The FASTA is now rewritten after the sort.

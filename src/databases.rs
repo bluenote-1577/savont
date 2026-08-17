@@ -4,7 +4,7 @@ use crate::taxonomy::{self, Database};
 
 const MARKER_FILE: &str = ".savont_db";
 /// Flat keyword list used by the CLI `possible_values` validator.
-pub const KEYWORDS: &[&str] = &["emu-1", "silva-138.2", "greengenes2-2024.09"];
+pub const KEYWORDS: &[&str] = &["emu-1", "silva-138.2", "greengenes2-2024.09", "unite-10.0"];
 
 
 /// Describes one versioned database: how to download it, load it, and extract
@@ -39,6 +39,13 @@ pub const ALL: &[DatabaseDef] = &[
         download:    download_gg2,
         load:        Database::load_gg2,
         extract_key: taxonomy::extract_gg2_key_from_header,
+    },
+    DatabaseDef {
+        keyword:     KEYWORDS[3],
+        description: "UNITE ITS 10.0 — dynamic divergence thresholding, all eukaryotes",
+        download:    download_unite,
+        load:        Database::load_unite,
+        extract_key: taxonomy::extract_unite_key_from_header,
     },
 ];
 
@@ -165,6 +172,89 @@ fn download_gg2(dest: &Path) -> Result<(), String> {
     let s = Command::new("wget").arg(url).arg("-P").arg(dest)
         .status().map_err(|e| format!("wget failed: {}", e))?;
     if !s.success() { return Err("wget returned non-zero for GreenGenes2 download".into()); }
+
+    Ok(())
+}
+
+fn download_unite(dest: &Path) -> Result<(), String> {
+    log::info!("Downloading UNITE ITS 10.0 database (dynamic divergence thresholding, all eukaryotes)...");
+    let url = "https://s3.hpc.ut.ee/plutof-public/original/e861a3d6-54f4-42dc-882a-5f129beac39a.tgz";
+    let tar = dest.join("unite-10.0.tgz");
+
+    let s = Command::new("wget")
+        .arg(url)
+        .arg("-O").arg(&tar)
+        .status()
+        .map_err(|e| format!("wget failed: {}", e))?;
+    if !s.success() { return Err("wget returned non-zero for UNITE download".into()); }
+
+    let s = Command::new("tar")
+        .arg("-xzf").arg(&tar)
+        .arg("-C").arg(dest)
+        .status()
+        .map_err(|e| format!("tar failed: {}", e))?;
+    if !s.success() { return Err("tar returned non-zero for UNITE extraction".into()); }
+
+    std::fs::remove_file(&tar).ok();
+
+    // Find the extracted .fasta file and preprocess it: minimap2 rejects reference names
+    // longer than 255 chars, but many UNITE headers exceed that. We write a short-header
+    // FASTA (SH accession only) and a companion taxonomy TSV so the full lineage is kept.
+    let orig_fasta = std::fs::read_dir(dest)
+        .map_err(|e| format!("Cannot read dest dir: {}", e))?
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .find(|p| p.extension().and_then(|x| x.to_str()) == Some("fasta"))
+        .ok_or_else(|| "No .fasta file found after UNITE extraction".to_string())?;
+
+    log::info!("Preprocessing UNITE FASTA (shortening headers, extracting taxonomy)...");
+    preprocess_unite(&orig_fasta, dest)?;
+    std::fs::remove_file(&orig_fasta).ok();
+
+    log::info!("UNITE database ready in {}", dest.display());
+    Ok(())
+}
+
+/// Rewrites a full UNITE FASTA into `unite_sequences.fasta` (SH-number headers only)
+/// and writes `unite_taxonomy.tsv` (sh_id → taxonomy string), so minimap2 stays under
+/// the 255-character reference name limit.
+fn preprocess_unite(src: &Path, dest: &Path) -> Result<(), String> {
+    use std::io::{BufRead, BufReader, Write, BufWriter};
+
+    let reader = BufReader::new(
+        std::fs::File::open(src).map_err(|e| format!("Cannot open {}: {}", src.display(), e))?
+    );
+    let mut fa = BufWriter::new(
+        std::fs::File::create(dest.join("unite_sequences.fasta"))
+            .map_err(|e| format!("Cannot create unite_sequences.fasta: {}", e))?
+    );
+    let mut tax = BufWriter::new(
+        std::fs::File::create(dest.join("unite_taxonomy.tsv"))
+            .map_err(|e| format!("Cannot create unite_taxonomy.tsv: {}", e))?
+    );
+
+    writeln!(tax, "sh_id\ttaxonomy").map_err(|e| e.to_string())?;
+
+    for line in reader.lines() {
+        let line = line.map_err(|e| format!("IO error reading FASTA: {}", e))?;
+        if line.starts_with('>') {
+            let header = &line[1..];
+            // Header: Species|Accession|SH_id|type|k__X;p__X;...;s__X
+            let parts: Vec<&str> = header.splitn(5, '|').collect();
+            if parts.len() == 5 {
+                let sh_id  = parts[2];
+                let tax_str = parts[4];
+                writeln!(fa,  ">{}", sh_id).map_err(|e| e.to_string())?;
+                writeln!(tax, "{}\t{}", sh_id, tax_str).map_err(|e| e.to_string())?;
+            } else {
+                // Malformed header — truncate to 255 chars as a fallback
+                let id = &header[..header.len().min(255)];
+                writeln!(fa, ">{}", id).map_err(|e| e.to_string())?;
+            }
+        } else {
+            writeln!(fa, "{}", line).map_err(|e| e.to_string())?;
+        }
+    }
 
     Ok(())
 }

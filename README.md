@@ -85,8 +85,8 @@ savont asv --pooled-samples sample1.fq.gz sample2.fq.gz  ...
 #### Step 2: download databases and classify ASVs
 
 ```sh
-# download Greengenes, EMU, or silva databases
-savont download --location /path/databases --dbs greengenes2-2024.09 emu-1 silva-138.2
+# download Greengenes, EMU, silva, or UNITE databases
+savont download --location /path/databases --dbs greengenes2-2024.09 emu-1 silva-138.2 unite-10.0
 
 # classify against any database
 savont classify -i savont-out -d /path/databases/emu-1 -t 20
@@ -158,13 +158,14 @@ Savont can also classify ASVs and generate a taxonomic profile with abundances. 
 ### Step 1: Download a reference database
 
 ```sh
-# Download one or more databases (emu-1, silva-138.2, greengenes2-2024.09)
+# Download one or more databases (emu-1, silva-138.2, greengenes2-2024.09, unite-10.0)
 savont download --location /path/databases --dbs emu-1
 savont download --location /path/databases --dbs silva-138.2
 savont download --location /path/databases --dbs greengenes2-2024.09
+savont download --location /path/databases --dbs unite-10.0
 
 # Or download multiple at once
-savont download --location /path/databases --dbs emu-1 silva-138.2 
+savont download --location /path/databases --dbs emu-1 silva-138.2
 ```
 
 ### Step 2a: Classify ASVs with alignment (`savont classify`)
@@ -302,6 +303,10 @@ More comprehensive than EMU, especially for understudied taxa. However, species-
 
 GreenGenes2 2024.09 species-level trainset (DADA2 format). Unannotated ranks are reported as `Greengenes_unannotated`.
 
+### UNITE (`unite-10.0`)
+
+[UNITE](https://unite.ut.ee/) 10.0 general release (February 2025) — dynamic divergence thresholding, all eukaryotes. Covers ITS1/ITS2 across fungi and other eukaryotes. Use this database when classifying ITS amplicons rather than 16S/18S rRNA. Unannotated ranks are reported as `UNITE_unannotated`.
+
 ### CHANGELOG
 
 See [the changelog.](CHANGELOG.md)
@@ -317,6 +322,8 @@ Jim Shaw, Marie Riisgaard-Jensen, Kasper Skytte Andersen, Rasmus Kirkegaard, Mor
 2. Curry, Kristen D., et al. "Emu: species-level microbial community profiling of full-length 16S rRNA Oxford Nanopore sequencing data." Nature methods 19.7 (2022): 845-853.
 
 3. McDonald, D., Jiang, Y., Balaban, M. et al. Greengenes2 unifies microbial data in a single reference tree. Nat Biotechnol 42, 715–718 (2024).
+
+4. Abarenkov, Kessy; Zirk, Allan; Piirmann, Timo; Pöhönen, Raivo; Ivanov, Filipp; Nilsson, R. Henrik; Kõljalg, Urmas (2025): UNITE general FASTA release for eukaryotes. Version 19.02.2025. UNITE Community. https://doi.org/10.15156/BIO/3301231 
 
 **If you use the SINTAX algorithm please cite**: Edgar, Robert C. "SINTAX: a simple non-Bayesian taxonomy classifier for 16S and ITS sequences." biorxiv (2016): 074161.
 

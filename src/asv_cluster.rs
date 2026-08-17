@@ -77,7 +77,7 @@ pub fn cluster_reads_by_kmers(
     log::info!("Starting greedy k-mer based clustering...");
 
     let k = args.kmer_size;
-    let threshold = 0.950;
+    let threshold = args.primary_clustering_threshold;
 
     // MinHash LSH parameters
     let use_bucketed = true;  // Flag to enable/disable bucketed approach

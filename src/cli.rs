@@ -25,11 +25,11 @@ pub enum Commands {
     #[command(name = "asv")]
     Cluster(ClusterArgs),
 
-    /// Classify ASVs against a reference database and generate taxonomy abundance table at species/genus level
+    /// Classify by aligning ASVs against a reference database with mapping similarity thresholds and generate taxonomy abundance table at species/genus level
     #[command(name = "classify")]
     Classify(ClassifyArgs),
 
-    /// Download reference databases for savont (EMU, SILVA, or GreenGenes2)
+    /// Download reference databases for savont (EMU, SILVA, GreenGenes2, or UNITE)
     #[command(name = "download")]
     Download(DownloadArgs),
 
@@ -181,6 +181,9 @@ pub struct ClusterArgs {
     /// Use exact (unbanded) POA alignment for consensus generation; slower but handles highly variable clusters
     #[arg(long, default_value_t = false)]
     pub no_band: bool,
+
+    #[arg(long, default_value_t = 0.95, hide = true)]
+    pub primary_clustering_threshold: f64,
 }
 
 #[derive(Parser, Debug, Clone)]

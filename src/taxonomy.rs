@@ -407,6 +407,87 @@ impl Database {
 
         Ok(taxonomy)
     }
+
+    /// Load UNITE ITS database (dynamic divergence thresholding, all eukaryotes).
+    /// Expects preprocessed files written by `savont download`: `unite_sequences.fasta`
+    /// (short SH-number headers) and `unite_taxonomy.tsv` (SH_id → taxonomy string).
+    pub fn load_unite(db_dir: &Path) -> Result<Self, std::io::Error> {
+        let fasta_path = db_dir.join("unite_sequences.fasta");
+        let tax_path   = db_dir.join("unite_taxonomy.tsv");
+
+        if !fasta_path.exists() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!(
+                    "unite_sequences.fasta not found in {}. \
+                     Run 'savont download --dbs unite-10.0' to set up the database.",
+                    db_dir.display()
+                ),
+            ));
+        }
+
+        log::info!("Loading UNITE taxonomy from {}", tax_path.display());
+        let taxonomy = Self::load_unite_taxonomy_from_tsv(&tax_path)?;
+        log::info!("Loaded {} UNITE taxonomy entries", taxonomy.len());
+
+        Ok(Database { fasta_path, taxonomy, extract_key: extract_unite_key_from_header })
+    }
+
+    /// Parse the preprocessed UNITE taxonomy TSV: `sh_id\tk__X;p__X;...;s__X`
+    fn load_unite_taxonomy_from_tsv(path: &Path) -> Result<HashMap<String, TaxonomyEntry>, std::io::Error> {
+        let reader = BufReader::new(File::open(path)?);
+        let mut taxonomy = HashMap::new();
+        let mut first = true;
+
+        for line in reader.lines() {
+            let line = line?;
+            if first { first = false; continue; } // skip header row
+
+            let mut cols = line.splitn(2, '\t');
+            let sh_id   = match cols.next() { Some(s) if !s.is_empty() => s.to_string(), _ => continue };
+            let tax_str = cols.next().unwrap_or("");
+
+            let mut kingdom = String::new();
+            let mut phylum  = String::new();
+            let mut class   = String::new();
+            let mut order   = String::new();
+            let mut family  = String::new();
+            let mut genus   = String::new();
+            let mut species = String::new();
+
+            for level in tax_str.split(';') {
+                let level = level.trim();
+                if let Some(v) = level.strip_prefix("k__") { kingdom = v.replace('_', " "); }
+                else if let Some(v) = level.strip_prefix("p__") { phylum  = v.replace('_', " "); }
+                else if let Some(v) = level.strip_prefix("c__") { class   = v.replace('_', " "); }
+                else if let Some(v) = level.strip_prefix("o__") { order   = v.replace('_', " "); }
+                else if let Some(v) = level.strip_prefix("f__") { family  = v.replace('_', " "); }
+                else if let Some(v) = level.strip_prefix("g__") { genus   = v.replace('_', " "); }
+                else if let Some(v) = level.strip_prefix("s__") { species = v.replace('_', " "); }
+            }
+
+            const U: &str = "UNITE_unannotated";
+            let fill = |s: String| if s.is_empty() { U.to_string() } else { s };
+
+            let entry = TaxonomyEntry {
+                tax_id:           sh_id.clone(),
+                species:          fill(species),
+                genus:            fill(genus),
+                family:           fill(family),
+                order:            fill(order),
+                class:            fill(class),
+                phylum:           fill(phylum),
+                clade:            String::new(),
+                superkingdom:     fill(kingdom),
+                subspecies:       String::new(),
+                species_subgroup: String::new(),
+                species_group:    String::new(),
+            };
+            taxonomy.insert(sh_id, entry);
+        }
+
+        Ok(taxonomy)
+    }
 }
 
 /// Represents the classification result for a single ASV
@@ -602,6 +683,14 @@ pub fn extract_gtdb_key_from_header(header: &str) -> Option<String> {
 /// Format: >d__Bacteria;p__...;s__epithet;  (no separate ref name — taxonomy IS the header)
 /// Returns the full header string (trimmed), which is the taxonomy map key.
 pub fn extract_gg2_key_from_header(header: &str) -> Option<String> {
+    let header = header.trim_start_matches('>').trim();
+    if header.is_empty() { None } else { Some(header.to_string()) }
+}
+
+/// Extract key from UNITE ITS FASTA header.
+/// Format: >Species|Accession|SH_number|type|k__Kingdom;...;s__Species
+/// The entire header (no spaces) is the minimap2 target name, used as-is as the map key.
+pub fn extract_unite_key_from_header(header: &str) -> Option<String> {
     let header = header.trim_start_matches('>').trim();
     if header.is_empty() { None } else { Some(header.to_string()) }
 }
