@@ -285,9 +285,11 @@ pub fn get_blockmers_inplace_sort(mut big_blockmer_map: Vec<(u64, [u32;2])>, big
 
     // Sort by anchor k-mer (first k bases)
     log::info!("Finding blockmers...");
-    big_blockmer_map.par_sort_unstable_by_key(|(kmer, _)| {
-        // Extract anchor: shift right by 2*l to remove suffix bits
-        kmer >> (2 * l)
+    big_blockmer_map.par_sort_unstable_by(|a, b| {
+        // Sort the full key so equally anchored alleles have a canonical order.
+        let anchor_a = a.0 >> (2 * l);
+        let anchor_b = b.0 >> (2 * l);
+        anchor_a.cmp(&anchor_b).then_with(|| a.0.cmp(&b.0))
     });
 
     log::trace!("Finished parallel sort of blockmers");
@@ -350,7 +352,10 @@ pub fn get_blockmers_inplace_sort(mut big_blockmer_map: Vec<(u64, [u32;2])>, big
 
                         // Sort by total count (descending) and keep top 2
                         let mut pairsvec = msg;
-                        pairsvec.sort_unstable_by(|a, b| (b.1[0] + b.1[1]).cmp(&(a.1[0] + a.1[1])));
+                        pairsvec.sort_unstable_by(|a, b| {
+                            (b.1[0] + b.1[1]).cmp(&(a.1[0] + a.1[1]))
+                                .then_with(|| a.0.cmp(&b.0))
+                        });
 
                         // Only keep top 2 blockmers (biallelic)
                         if pairsvec.len() < 2 {
@@ -477,7 +482,10 @@ pub fn get_snpmers_inplace_sort(mut big_kmer_map: Vec<(Kmer64, [u32;2])>, k: usi
 
     log::info!("Finding snpmers...");
     //big_kmer_map.par_sort_unstable_by_key(|x| retrieve_masked_kmer(x.0, k));
-    big_kmer_map.par_sort_unstable_by_key(|x| split_kmer(x.0, k));
+    big_kmer_map.par_sort_unstable_by(|a, b| {
+        split_kmer(a.0, k).cmp(&split_kmer(b.0, k))
+            .then_with(|| a.0.cmp(&b.0))
+    });
 
     log::trace!("Finished parallel sort");
     let single_strand = args.single_strand;
@@ -551,7 +559,10 @@ pub fn get_snpmers_inplace_sort(mut big_kmer_map: Vec<(Kmer64, [u32;2])>, k: usi
                         assert!(msg[0].0 != msg[1].0);
                         // SNPmers (not split) and counts
                         let mut pairsvec = msg;
-                        pairsvec.sort_unstable_by(|a,b| (b.1[0] + b.1[1]).cmp(&(a.1[0] + a.1[1])));
+                        pairsvec.sort_unstable_by(|a,b| {
+                            (b.1[0] + b.1[1]).cmp(&(a.1[0] + a.1[1]))
+                                .then_with(|| a.0.cmp(&b.0))
+                        });
                         let n = pairsvec[0].1[0] + pairsvec[0].1[1];
                         let succ = pairsvec[1].1[0] + pairsvec[1].1[1];
                         let right_p_val_thresh1 = utils::binomial_test(n as u64, succ as u64, 0.025);

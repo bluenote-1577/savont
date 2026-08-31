@@ -62,7 +62,10 @@ fn query_read_against_index(
         similarities.push((candidate_id, similarity));
     }
 
-    similarities.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+    similarities.sort_by(|a, b| {
+        b.1.partial_cmp(&a.1).unwrap()
+            .then_with(|| a.0.cmp(&b.0))
+    });
     similarities
 }
 
@@ -209,13 +212,13 @@ pub fn cluster_reads_by_kmers(
     }
 
     let mut clusters: Vec<Vec<usize>> = clusters_map.into_values().collect();
+    // HashMap iteration randomizes member order. Canonicalize members before
+    // using the first member as the equal-size cluster tie-break.
+    for cluster in &mut clusters {
+        cluster.sort_unstable();
+    }
     clusters.sort_by(|a, b| b.len().cmp(&a.len())
         .then_with(|| a.first().cmp(&b.first())));
-
-    // Sort members within each cluster because lower IDs have better estimated accuracy
-    for cluster in clusters.iter_mut(){
-        cluster.sort();
-    }
 
     // Remove small clusters
     clusters.retain(|cluster| cluster.len() >= args.min_cluster_size);
@@ -420,7 +423,8 @@ fn find_best_representative_iterative(
 ) -> Option<usize> {
     let mask = !(3 << (k - 1));
 
-    representatives.par_iter().with_max_len(1).find_any(|&&rep_id| {
+    // find_first preserves representative order while retaining parallel search.
+    representatives.par_iter().with_max_len(1).find_first(|&&rep_id| {
         let rep_snpmers = twin_reads[rep_id].snpmer_kmers();
 
         // Check SNPmer compatibility
@@ -541,7 +545,11 @@ fn validate_candidates_with_blockmers(
     }
 
     // Sort by fewest mismatches, then most matches
-    blockmer_cands.sort_by(|a, b| a.2.cmp(&b.2).then(b.1.cmp(&a.1)));
+    blockmer_cands.sort_by(|a, b| {
+        a.2.cmp(&b.2)
+            .then(b.1.cmp(&a.1))
+            .then(a.0.cmp(&b.0))
+    });
 
     // Check if best candidate passes blockmer validation
     if blockmer_cands[0].2 > 1 {
@@ -726,7 +734,10 @@ pub fn cluster_reads_by_snpmers(
     let mut writer = std::io::BufWriter::new(std::fs::File::create(&cluster_file).unwrap());
     writeln!(writer, "kmer_cluster_id\tsnpmer_cluster_id\tsize\trepresentative\tmembers").unwrap();
 
-    for (kmer_cluster_id, snpmer_clusters) in local_clusters_map.iter() {
+    let mut kmer_cluster_ids: Vec<usize> = local_clusters_map.keys().copied().collect();
+    kmer_cluster_ids.sort_unstable();
+    for kmer_cluster_id in kmer_cluster_ids {
+        let snpmer_clusters = &local_clusters_map[&kmer_cluster_id];
         for (local_snpmer_id, snpmer_cluster) in snpmer_clusters.iter().enumerate() {
             if snpmer_cluster.is_empty() {
                 continue;
@@ -874,7 +885,10 @@ fn build_consensus_snpmers_top_n(
     let mut consensus_snpmers = Vec::new();
     for (splitmer, kmer_data) in splitmer_data {
         // Find the k-mer with maximum count
-        if let Some((&best_kmer, (count, positions))) = kmer_data.iter().max_by_key(|(_, (count, _))| count) {
+        if let Some((&best_kmer, (count, positions))) = kmer_data.iter().max_by(|a, b| {
+            a.1.0.cmp(&b.1.0)
+                .then_with(|| b.0.to_u64().cmp(&a.0.to_u64()))
+        }) {
             if *count >= (cluster.len()/6).max(1) {
                 // Calculate median position
                 let mut pos_sorted = positions.clone();
@@ -944,7 +958,10 @@ fn build_consensus_blockmers_top_n(
     let mut consensus_blockmers = Vec::new();
     for (splitmer, kmer_data) in splitmer_data {
         // Find the blockmer with maximum count
-        if let Some((&best_kmer, (count, positions))) = kmer_data.iter().max_by_key(|(_, (count, _))| count) {
+        if let Some((&best_kmer, (count, positions))) = kmer_data.iter().max_by(|a, b| {
+            a.1.0.cmp(&b.1.0)
+                .then_with(|| b.0.to_u64().cmp(&a.0.to_u64()))
+        }) {
             if *count >= (cluster.len()/6).max(1) {
                 // Calculate median position
                 let mut pos_sorted = positions.clone();
@@ -1259,6 +1276,7 @@ fn recluster_one_round_top_n(
             };
         }
 
+        all_clusters[i].0.sort_unstable();
         merged_clusters.push(all_clusters[i].0.clone());
     }
 

@@ -143,10 +143,10 @@ Pooling may allow recovery of low abundance ASVs and prevent cross-sample ASV sp
 
 The `savont asv` command produces:
 
-1. **final_asvs.fasta** - Final ASV sequences (high-quality, chimera-filtered)
-2. **feature-table.tsv** - QIIME2-compatible feature table (ASV × sample read counts)
-3. **final_clusters.tsv** - Cluster assignments _approximately_ mapping reads to ASVs
-4. **temp/** - Directory containing intermediate files
+1. **final_asvs.fasta** - Final ASV sequences; headers use `final_asv_N_depth_M` (N = rank by depth, M = EM-refined read depth)
+2. **feature-table.tsv** - QIIME2-compatible feature table (ASV × sample read counts); row IDs match `final_asv_N_depth_M` from the FASTA
+3. **final_assignments.tsv** - Read-to-ASV assignment table: one row per read (those passing length/quality filters), columns `read_id`, `asv` (`final_asv_N` or `unassigned`), `alignment_identity`, `est_read_identity`. Use this to find which reads belong to which ASV.
+4. **temp/** - Intermediate files including `final_clusters.tsv` (Stage 5 cluster membership) and `read_to_asv_mappings.tsv` (raw EM alignment output)
 
 ## Taxonomic profiling against a reference database
 

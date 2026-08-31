@@ -810,3 +810,53 @@ fn test_pooled_samples_export() {
         .collect();
     assert_eq!(ft_ids, rs_ids, "feature table IDs must match rep_seqs IDs in pooled export");
 }
+
+#[test]
+fn test_asv_outputs_are_deterministic_across_runs_and_threads() {
+    const OUTPUTS: &[&str] = &[
+        "final_asvs.fasta",
+        "feature-table.tsv",
+        "final_assignments.tsv",
+        "temp/final_clusters.tsv",
+        "temp/kmer_clusters_stage2.tsv",
+        "temp/snpmer_clusters_before_reclust2.5.tsv",
+        "temp/final_snpmer_clusters_stage3.tsv",
+        "temp/consensus_sequences.fasta",
+        "temp/clusters_after_quality_filter_stage4.tsv",
+        "temp/polished_consensuses.fasta",
+        "temp/final_clusters_merged_stage5.tsv",
+        "temp/merged_consensus_sequences.fasta",
+    ];
+
+    let run = |threads: &str| {
+        let tmp = TempDir::new().unwrap();
+        Command::cargo_bin("savont")
+            .unwrap()
+            .args([
+                "asv",
+                READS_FQ,
+                "-o",
+                tmp.path().to_str().unwrap(),
+                "-t",
+                threads,
+                "--min-cluster-size",
+                "5",
+            ])
+            .assert()
+            .success();
+        tmp
+    };
+
+    let baseline = run("1");
+    for candidate in [run("1"), run("4"), run("4")] {
+        for relative_path in OUTPUTS {
+            let expected = fs::read(baseline.path().join(relative_path)).unwrap();
+            let observed = fs::read(candidate.path().join(relative_path)).unwrap();
+            assert_eq!(
+                expected, observed,
+                "{} differed between repeated/cross-thread ASV runs",
+                relative_path,
+            );
+        }
+    }
+}

@@ -399,7 +399,7 @@ pub fn align_and_consensus(twin_reads: &[TwinRead], clusters: Vec<Vec<usize>>, a
     });
 
     let mut consensus_seqs = consensus_seqs.into_inner().unwrap();
-    consensus_seqs.sort_by_key(|k| (k.3) as i64 * -1);
+    consensus_seqs.sort_by(|a, b| b.3.cmp(&a.3).then_with(|| a.0.cmp(&b.0)));
     let consensus_seqs: Vec<ConsensusSequence> = consensus_seqs.into_iter().map(|(id, seq, hp_lens, depth, cluster)| ConsensusSequence::new(seq, hp_lens, depth, id, cluster)).collect();
 
     // Write HPC consensus sequences to file
@@ -671,7 +671,7 @@ pub fn estimate_quality_error_rates(
         .enumerate()
         .map(|(idx, cons)| (idx, cons.depth))
         .collect();
-    cluster_depths.sort_by(|a, b| b.1.cmp(&a.1)); // Sort by depth descending
+    cluster_depths.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
 
     let top_clusters: Vec<usize> = cluster_depths
         .iter()
@@ -825,6 +825,87 @@ pub fn write_clusters_tsv(
     Ok(())
 }
 
+/// Write final_assignments.tsv: one row per read in twin_reads (assigned or unassigned).
+/// Reads that have no valid EM alignment appear with asv="unassigned".
+/// `debug_to_final` maps internal debug_id → final_asv_index (depth-sorted rank).
+/// ASV labels match feature-table.tsv: `final_asv_N_depth_M` (or `..._depth_A-B-C` pooled).
+pub fn write_final_assignments(
+    twin_reads: &[crate::types::TwinRead],
+    consensuses: &[ConsensusSequence],
+    mappings_path: &std::path::Path,
+    debug_to_final: &std::collections::HashMap<usize, usize>,
+    output_path: &std::path::Path,
+) -> std::io::Result<()> {
+    use std::io::{BufRead, BufReader, BufWriter, Write};
+    use std::collections::HashMap;
+
+    // Build final_idx → (asv_label, asv_len) from consensuses (already depth-sorted, ids reassigned)
+    let idx_to_info: HashMap<usize, (String, usize)> = consensuses.iter().enumerate().map(|(i, c)| {
+        let depth_str = if c.per_sample_depths.is_empty() {
+            (c.depth + c.appended_depth).to_string()
+        } else {
+            c.per_sample_depths.iter().map(|d| d.to_string()).collect::<Vec<_>>().join("-")
+        };
+        let label = format!("final_asv_{}_depth_{}", i, depth_str);
+        let asv_len: usize = c.hp_lengths.iter().map(|&x| x as usize).sum();
+        (i, (label, asv_len))
+    }).collect();
+
+    // Parse read_to_asv_mappings.tsv: keep only the first (best) row per read.
+    // k-mer/EM path columns: read_id, debug_id:N, snpmer_mm, minimap2_nm
+    // minimap2 path columns: read_id, debug_id:N, minimap2_nm
+    let mut read_to_asv: HashMap<String, (usize, i32)> = HashMap::new(); // read_id → (final_idx, nm)
+    if mappings_path.exists() {
+        let reader = BufReader::new(std::fs::File::open(mappings_path)?);
+        for line in reader.lines() {
+            let line = line?;
+            let parts: Vec<&str> = line.splitn(5, '\t').collect();
+            if parts.len() < 3 { continue; }
+            let read_id = parts[0].to_string();
+            if read_to_asv.contains_key(&read_id) { continue; } // first row wins
+            let debug_id: usize = parts[1]
+                .strip_prefix("debug_id:").and_then(|s| s.parse().ok())
+                .unwrap_or(usize::MAX);
+            // 4-column (k-mer/EM): col3 is minimap2_nm; 3-column (minimap2): col2 is nm
+            let nm: i32 = if parts.len() >= 4 {
+                parts[3].parse().unwrap_or(0)
+            } else {
+                parts[2].parse().unwrap_or(0)
+            };
+            if let Some(&final_idx) = debug_to_final.get(&debug_id) {
+                read_to_asv.insert(read_id, (final_idx, nm));
+            }
+        }
+    }
+
+    let mut writer = BufWriter::new(std::fs::File::create(output_path)?);
+    writeln!(writer, "read_id\tasv\talignment_identity\test_read_identity")?;
+
+    for read in twin_reads {
+        let est = match read.est_id {
+            Some(e) => format!("{:.4}", e),
+            None => "NA".to_string(),
+        };
+        match read_to_asv.get(&read.id) {
+            Some(&(final_idx, nm)) => {
+                let (label, asv_len) = idx_to_info.get(&final_idx)
+                    .map(|(l, len)| (l.as_str(), *len))
+                    .unwrap_or(("unassigned", 1));
+                let identity = if asv_len > 0 {
+                    let nm_clamped = (nm as usize).min(asv_len);
+                    (asv_len - nm_clamped) as f64 / asv_len as f64 * 100.0
+                } else { 0.0 };
+                writeln!(writer, "{}\t{}\t{:.4}\t{}", read.id, label, identity, est)?;
+            }
+            None => {
+                writeln!(writer, "{}\tunassigned\tNA\t{}", read.id, est)?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
 /// Write consensus sequences to a FASTA file
 /// Uses decompressed sequences if available, otherwise uses HPC sequences
 pub fn write_consensus_fasta(
@@ -845,7 +926,7 @@ pub fn write_consensus_fasta(
         } else {
             consensus.per_sample_depths.iter().map(|d| d.to_string()).collect::<Vec<_>>().join("-")
         };
-        let header = format!(">{}_consensus_{}_depth_{} debug_id:{} chimera_score:{} unambiguous_read_assignments:{} ambig_read_assignments:{} num_align_leq_10_mismatches:{}",
+        let header = format!(">{}_asv_{}_depth_{} debug_id:{} chimera_score:{} unambiguous_read_assignments:{} ambig_read_assignments:{} num_align_leq_10_mismatches:{}",
             prefix, i, depth_field, consensus.id, consensus.chimera_score.unwrap_or(0), consensus.unambig_best_read_map_count.unwrap_or(0),
             consensus.ambig_read_map_count.unwrap_or(0), consensus.num_map_leq_10nm.unwrap_or(0));
         writeln!(writer, "{}", header)?;
@@ -885,7 +966,7 @@ pub fn analyze_pileup_consensuses(
         .enumerate()
         .map(|(idx, cons)| (idx, cons.depth))
         .collect();
-    sorted_by_depth.sort_by(|a, b| b.1.cmp(&a.1));
+    sorted_by_depth.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
     
     let debug_indices: Vec<usize> = vec![30];
 
@@ -1178,7 +1259,10 @@ fn remove_similar_seqs_kmers(mut consensuses: Vec<ConsensusSequence>) -> Vec<Con
         consensus_id_to_minis.insert(i, minimizers);
     }
 
-    for (&enum_id, minimizers) in consensus_id_to_minis.iter() {
+    for enum_id in 0..consensuses.len() {
+        let Some(minimizers) = consensus_id_to_minis.get(&enum_id) else {
+            continue;
+        };
         let mut possible_greater_ids = std::collections::HashSet::new();
         let mut first = true;
         for mini in minimizers {
@@ -1283,7 +1367,8 @@ pub fn merge_similar_consensuses(
     });
 
     // Merge low quality consensus reads into their target consensuses
-    let low_qual_mappings = low_qual_mappings.into_inner().unwrap();
+    let mut low_qual_mappings = low_qual_mappings.into_inner().unwrap();
+    low_qual_mappings.sort_unstable();
     let mut consensuses = consensuses;
 
     for (query_idx, target_idx) in low_qual_mappings {
@@ -1437,7 +1522,11 @@ pub fn merge_similar_consensuses(
                 }
             }
             if query_to_ref_mappings.len() > 0 {
-                query_to_ref_mappings.sort_by(|a, b| b.2.cmp(&a.2)); // Sort by depth descending
+                query_to_ref_mappings.sort_by(|a, b| {
+                    b.2.cmp(&a.2)
+                        .then_with(|| a.1.cmp(&b.1))
+                        .then_with(|| a.0.cmp(&b.0))
+                });
                 let best_target = query_to_ref_mappings[0].0;
                 merge_map.insert(query_idx, best_target);
             }
@@ -1466,7 +1555,10 @@ pub fn merge_similar_consensuses(
     }
 
     // Perform the merges
-    for (&query_idx, &target_idx) in &merged_into {
+    for query_idx in 0..consensuses.len() {
+        let Some(&target_idx) = merged_into.get(&query_idx) else {
+            continue;
+        };
         log::debug!(
             "Merging consensus {} (depth {}) into consensus {} (depth {})",
             consensuses[query_idx].id,
@@ -1479,6 +1571,10 @@ pub fn merge_similar_consensuses(
         let reads_to_move = new_clusters[query_idx].clone();
         new_clusters[target_idx].extend(reads_to_move);
         new_clusters[query_idx].clear();
+    }
+
+    for cluster in &mut new_clusters {
+        cluster.sort_unstable();
     }
 
     // Build new consensus sequences with updated depths
@@ -1500,7 +1596,11 @@ pub fn merge_similar_consensuses(
         new_consensuses.len()
     );
 
-    new_consensuses.sort_by(|a, b| b.depth.cmp(&a.depth)); // Sort by depth descending
+    new_consensuses.sort_by(|a, b| {
+        b.depth.cmp(&a.depth)
+            .then_with(|| a.sequence.cmp(&b.sequence))
+            .then_with(|| a.id.cmp(&b.id))
+    });
 
 
     let final_file = temp_dir.join("final_clusters_merged_stage5.tsv");
@@ -1517,9 +1617,38 @@ pub fn merge_similar_consensuses(
 }
 
 /// Equivalence class: a set of ASVs that a group of reads maps to with equal quality
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 struct EquivalenceClass {
     asv_indices: Vec<usize>,
+}
+
+fn sorted_equivalence_classes(
+    classes: HashMap<EquivalenceClass, usize>,
+) -> Vec<(EquivalenceClass, usize)> {
+    let mut classes: Vec<_> = classes.into_iter().collect();
+    classes.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+    classes
+}
+
+#[cfg(test)]
+mod determinism_tests {
+    use super::*;
+
+    #[test]
+    fn equivalence_classes_have_canonical_iteration_order() {
+        let mut classes = HashMap::new();
+        classes.insert(EquivalenceClass { asv_indices: vec![3] }, 4);
+        classes.insert(EquivalenceClass { asv_indices: vec![0, 2] }, 7);
+        classes.insert(EquivalenceClass { asv_indices: vec![0, 1] }, 5);
+
+        let sorted = sorted_equivalence_classes(classes);
+        let keys: Vec<Vec<usize>> = sorted
+            .into_iter()
+            .map(|(class, _)| class.asv_indices)
+            .collect();
+
+        assert_eq!(keys, vec![vec![0, 1], vec![0, 2], vec![3]]);
+    }
 }
 
 /// Refine ASV depths using minimap2 all-vs-all mapping (used in low-polymorphism mode).
@@ -1628,7 +1757,7 @@ fn refine_asv_depths_with_minimap2(
         *total_assigned_reads.lock().unwrap() += 1;
     });
 
-    let eq_classes = eq_classes.into_inner().unwrap();
+    let eq_classes = sorted_equivalence_classes(eq_classes.into_inner().unwrap());
     let filtered_reads = filtered_reads_count.into_inner().unwrap();
     let total_assigned = total_assigned_reads.into_inner().unwrap();
 
@@ -1924,7 +2053,7 @@ pub fn refine_asv_depths_with_em(
         }
     });
 
-    let eq_classes = eq_classes.into_inner().unwrap();
+    let eq_classes = sorted_equivalence_classes(eq_classes.into_inner().unwrap());
     let filtered_reads = filtered_reads_count.into_inner().unwrap();
     let total_assigned = total_assigned_reads.into_inner().unwrap();
 
@@ -2170,7 +2299,7 @@ pub fn compute_per_sample_depths(
                 }
             });
 
-        let eq_classes = eq_classes.into_inner().unwrap();
+        let eq_classes = sorted_equivalence_classes(eq_classes.into_inner().unwrap());
         let total_assigned = total_assigned.into_inner().unwrap();
         let filtered = filtered_count.into_inner().unwrap();
 
@@ -2266,7 +2395,7 @@ fn compute_per_sample_depths_minimap2(
                 *total_assigned.lock().unwrap() += 1;
             });
 
-        let eq_classes = eq_classes.into_inner().unwrap();
+        let eq_classes = sorted_equivalence_classes(eq_classes.into_inner().unwrap());
         let total_assigned = total_assigned.into_inner().unwrap();
         let filtered = filtered_count.into_inner().unwrap();
 

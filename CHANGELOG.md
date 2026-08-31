@@ -2,6 +2,14 @@
 
 All notable changes to savont will be documented in this file.
 
+## [0.7.0] - 2026-8-30
+
+- Added `final_assignments.tsv` to the output directory: a clean read-to-ASV assignment table with columns `read_id`, `asv`, `alignment_identity`, and `est_read_identity` (Phred-estimated per-base read accuracy). Covers all reads that passed length/quality filters; reads with no valid EM alignment are marked `unassigned`.
+- Renamed the primary ASV identifier from `final_consensus_N` to `final_asv_N` in `final_asvs.fasta` headers and `feature-table.tsv` row IDs.
+- Moved `final_clusters.tsv` to `temp/final_clusters.tsv` (internal Stage 5 cluster membership, not user-facing).
+- Made default ASV outputs more deterministic across repeated runs and thread counts.
+- Fixed SILVA database download to point at correct download URL. 
+
 ## [0.6.4] - 2026-8-17
 
 - Added the UNITE database for ITS classification. 

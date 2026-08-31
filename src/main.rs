@@ -140,7 +140,15 @@ fn run_cluster(args: &cli::ClusterArgs, cli_args: &cli::Cli) {
     // Refine ASV depths using EM algorithm on read-level mappings
     log::info!("=== STAGE 7: Refining ASV depths with alignments and EM algorithm ===");
     alignment::refine_asv_depths_with_em(&twin_reads, &mut consensuses, &kmer_info, &args, &temp_dir);
-    consensuses.sort_by(|a, b| b.depth.partial_cmp(&a.depth).unwrap());
+    consensuses.sort_by(|a, b| {
+        b.depth.cmp(&a.depth)
+            .then_with(|| a.sequence.cmp(&b.sequence))
+            .then_with(|| a.id.cmp(&b.id))
+    });
+    // Build debug_id → final_asv_index before id reassignment.
+    // Used to translate read_to_asv_mappings.tsv debug_ids into final_asv_N labels.
+    let debug_to_final: std::collections::HashMap<usize, usize> =
+        consensuses.iter().enumerate().map(|(i, c)| (c.id, i)).collect();
     // Rewrite the EM FASTA in the new sorted order so Stage 7b's asv_idx aligns with consensuses[].
     // The FASTA was written inside refine_asv_depths_with_em before this sort, so without this
     // rewrite, compute_per_sample_depths would assign per-sample counts to the wrong ASVs.
@@ -189,14 +197,25 @@ fn run_cluster(args: &cli::ClusterArgs, cli_args: &cli::Cli) {
 
     debug_consensus_twin_read(&kmer_info, &consensuses, &args);
 
-    // Write final cluster information
-    let final_clusters = output_dir.join("final_clusters.tsv");
+    // Write cluster information to temp (internal file, not user-facing)
+    let final_clusters = temp_dir.join("final_clusters.tsv");
 
     // Change ids to the order to match up with the final asvs
     consensuses.iter_mut().enumerate().for_each(|(i, c)| c.id = i);
 
     alignment::write_clusters_tsv(&consensuses, &twin_reads, &final_clusters, "final")
         .expect("Failed to write final_clusters.tsv");
+
+    // Write user-facing read → ASV assignments with clean final_asv_N naming
+    let assignments_path = output_dir.join("final_assignments.tsv");
+    alignment::write_final_assignments(
+        &twin_reads,
+        &consensuses,
+        &temp_dir.join("read_to_asv_mappings.tsv"),
+        &debug_to_final,
+        &assignments_path,
+    ).expect("Failed to write final_assignments.tsv");
+
     log::info!("=== SAVONT COMPLETED SUCCESSFULLY in {:?} SECONDS ===", time_start.elapsed().as_secs());
 }
 
@@ -389,10 +408,10 @@ fn write_feature_table(
     for (i, c) in consensuses.iter().enumerate() {
         if c.per_sample_depths.is_empty() {
             let depth = c.depth + c.appended_depth;
-            writeln!(f, "final_consensus_{}_depth_{}\t{}", i, depth, depth)?;
+            writeln!(f, "final_asv_{}_depth_{}\t{}", i, depth, depth)?;
         } else {
             let depth_str: Vec<String> = c.per_sample_depths.iter().map(|d| d.to_string()).collect();
-            let otu_id = format!("final_consensus_{}_depth_{}", i, depth_str.join("-"));
+            let otu_id = format!("final_asv_{}_depth_{}", i, depth_str.join("-"));
             writeln!(f, "{}\t{}", otu_id, depth_str.join("\t"))?;
         }
     }

@@ -144,8 +144,8 @@ fn download_emu(dest: &Path) -> Result<(), String> {
 
 fn download_silva(dest: &Path) -> Result<(), String> {
     log::info!("Downloading SILVA database...");
-    let fasta_url = "https://www.arb-silva.de/fileadmin/silva_databases/current/Exports/SILVA_138.2_SSURef_NR99_tax_silva_trunc.fasta.gz";
-    let tax_url   = "https://www.arb-silva.de/fileadmin/silva_databases/current/Exports/taxonomy/taxmap_slv_ssu_ref_nr_138.2.txt.gz";
+    let fasta_url = "https://www.arb-silva.de/fileadmin/silva_databases/release_138.2/Exports/SILVA_138.2_SSURef_NR99_tax_silva_trunc.fasta.gz";
+    let tax_url   = "https://www.arb-silva.de/fileadmin/silva_databases/release_138.2/Exports/taxonomy/taxmap_slv_ssu_ref_nr_138.2.txt.gz";
 
     let s = Command::new("wget").arg(fasta_url).arg("-P").arg(dest)
         .status().map_err(|e| format!("wget failed: {}", e))?;
@@ -172,6 +172,29 @@ fn download_gg2(dest: &Path) -> Result<(), String> {
     let s = Command::new("wget").arg(url).arg("-P").arg(dest)
         .status().map_err(|e| format!("wget failed: {}", e))?;
     if !s.success() { return Err("wget returned non-zero for GreenGenes2 download".into()); }
+
+    Ok(())
+}
+
+#[allow(dead_code)]
+fn download_silva_144(dest: &Path) -> Result<(), String> {
+    log::info!("Downloading SILVA 144 database...");
+    let fasta_url = "https://www.arb-silva.de/fileadmin/silva_databases/release_144/Exports/SILVA_144_SSURef_NR99_tax_silva_trunc.fasta.gz";
+    let tax_url   = "https://www.arb-silva.de/fileadmin/silva_databases/release_144/Exports/taxonomy/taxmap_slv_ssu_ref_nr_144.txt.gz";
+
+    let s = Command::new("wget").arg(fasta_url).arg("-P").arg(dest)
+        .status().map_err(|e| format!("wget failed: {}", e))?;
+    if !s.success() { return Err("wget returned non-zero for SILVA 144 FASTA".into()); }
+
+    let s = Command::new("wget").arg(tax_url).arg("-P").arg(dest)
+        .status().map_err(|e| format!("wget failed: {}", e))?;
+    if !s.success() { return Err("wget returned non-zero for SILVA 144 taxonomy".into()); }
+
+    Command::new("gzip")
+        .arg("-d")
+        .arg(dest.join("taxmap_slv_ssu_ref_nr_144.txt.gz"))
+        .status()
+        .map_err(|e| format!("gzip failed: {}", e))?;
 
     Ok(())
 }
