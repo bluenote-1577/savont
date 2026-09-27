@@ -1,12 +1,12 @@
 use crate::constants::DEDUP_SNPMERS;
 use crate::constants::QUALITY_SEQ_BIN;
 use crate::types::*;
+use crate::utils::*;
+use bio_seq::prelude::*;
+use bio_seq::seq::Seq;
 use fxhash::FxHashMap;
 use fxhash::FxHashSet;
 use std::collections::VecDeque;
-use bio_seq::seq::Seq;
-use bio_seq::prelude::*;
-use crate::utils::*;
 
 //create new alias kmer = u64
 pub type Kmer64 = u64;
@@ -103,7 +103,6 @@ pub fn minimizer_seeds_positions(
     w: usize,
     k: usize,
 ) {
-
     if string.len() < k + w - 1 {
         return;
     }
@@ -167,15 +166,13 @@ pub fn minimizer_seeds_positions(
         let kmer_pos_global = i + 1 - k;
         rolling_window[kmer_pos_global % w] = hash;
 
-        if hash < min_val{
+        if hash < min_val {
             min_val = hash;
             let min_pos_global = i - k + 1;
             min_pos = min_pos_global % w;
             kmer_vec.push(hash);
             positions.push(min_pos_global as u64);
-        }
-
-        else if min_pos == (i - k + 1) % w {
+        } else if min_pos == (i - k + 1) % w {
             min_pos = position_min(rolling_window).unwrap();
             min_val = rolling_window[min_pos];
             let offset = (((i - k + 1) % w) as i64 - min_pos as i64).rem_euclid(w as i64);
@@ -186,13 +183,7 @@ pub fn minimizer_seeds_positions(
     }
 }
 
-
-pub fn fmh_seeds(
-    string: &[u8],
-    kmer_vec: &mut Vec<u64>,
-    c: usize,
-    k: usize
-) {
+pub fn fmh_seeds(string: &[u8], kmer_vec: &mut Vec<u64>, c: usize, k: usize) {
     type MarkerBits = u64;
     if string.len() < k {
         return;
@@ -220,7 +211,7 @@ pub fn fmh_seeds(
         rolling_kmer_r_marker >>= 2;
         rolling_kmer_r_marker |= nuc_r << marker_reverse_shift_dist;
     }
-    for i in marker_k-1..len {
+    for i in marker_k - 1..len {
         let nuc_byte = string[i] as usize;
         let nuc_f = BYTE_TO_SEQ[nuc_byte] as u64;
         let nuc_r = 3 - nuc_f;
@@ -283,7 +274,7 @@ pub fn fmh_seeds_positions(
         rolling_kmer_r_marker >>= 2;
         rolling_kmer_r_marker |= nuc_r << marker_reverse_shift_dist;
     }
-    for i in marker_k-1..len {
+    for i in marker_k - 1..len {
         let nuc_byte = string[i] as usize;
         let nuc_f = BYTE_TO_SEQ[nuc_byte] as u64;
         let nuc_r = 3 - nuc_f;
@@ -312,7 +303,6 @@ pub fn fmh_seeds_positions(
         }
     }
 }
-
 
 pub fn get_twin_read_syncmer(
     string: Vec<u8>,
@@ -350,7 +340,7 @@ pub fn get_twin_read_syncmer(
 
     let marker_reverse_shift_dist = 2 * (marker_k - 1);
     let blockmer_reverse_shift_dist = 2 * (blockmer_k - 1);
-    let split_mask = !(3 << (k-1));
+    let split_mask = !(3 << (k - 1));
     let marker_mask = MarkerBits::MAX >> (std::mem::size_of::<MarkerBits>() * 8 - 2 * marker_k);
     let marker_rev_mask = !(3 << (2 * marker_k - 2));
     let blockmer_mask = MarkerBits::MAX >> (std::mem::size_of::<MarkerBits>() * 8 - 2 * blockmer_k);
@@ -360,21 +350,21 @@ pub fn get_twin_read_syncmer(
     let mut debug_blockmers = vec![];
 
     // New syncmer-related variables
-    let s = k - c + 1;  // length of syncmers
+    let s = k - c + 1; // length of syncmers
     let s_mask = MarkerBits::MAX >> (std::mem::size_of::<MarkerBits>() * 8 - 2 * s);
     let s_rev_mask = !(3 << (2 * s - 2));
     let s_reverse_shift_dist = 2 * (s - 1);
-    
+
     let mut s_mer_hashes = VecDeque::with_capacity(k - s + 1);
     let mut rolling_s_mer_f: MarkerBits = 0;
     let mut rolling_s_mer_r: MarkerBits = 0;
 
     let mut read_with_all_equal_qualities = false;
-    if let Some(qualities) = qualities.as_ref(){
+    if let Some(qualities) = qualities.as_ref() {
         //Ensure that not all qualities are the same value. If they are, possibly it is an old pacbio run... ignore them
         let mut q_iter = qualities.iter();
         let first_q = q_iter.next().unwrap();
-        if q_iter.all(|q| q == first_q){
+        if q_iter.all(|q| q == first_q) {
             read_with_all_equal_qualities = true;
         }
     }
@@ -410,7 +400,7 @@ pub fn get_twin_read_syncmer(
         rolling_kmer_r_blockmer |= nuc_r << blockmer_reverse_shift_dist;
     }
 
-    for i in marker_k-1..len {
+    for i in marker_k - 1..len {
         let nuc_byte = string[i] as usize;
         let nuc_f = BYTE_TO_SEQ[nuc_byte] as u64;
         let nuc_r = 3 - nuc_f;
@@ -425,7 +415,7 @@ pub fn get_twin_read_syncmer(
 
         let split_f = rolling_kmer_f_marker & split_mask;
         let split_r = rolling_kmer_r_marker & split_mask;
-    
+
         let canonical_marker = split_f < split_r;
         let canonical_kmer_marker = if canonical_marker {
             rolling_kmer_f_marker
@@ -437,7 +427,7 @@ pub fn get_twin_read_syncmer(
         rolling_s_mer_f <<= 2;
         rolling_s_mer_f |= nuc_f;
         rolling_s_mer_f &= s_mask;
-        
+
         rolling_s_mer_r >>= 2;
         rolling_s_mer_r &= s_rev_mask;
         rolling_s_mer_r |= nuc_r << s_reverse_shift_dist;
@@ -450,13 +440,13 @@ pub fn get_twin_read_syncmer(
         };
 
         let hash = mm_hash64(canonical_s_mer);
-        
+
         // Add to our window of s-mer hashes
         s_mer_hashes.push_back(hash);
         if s_mer_hashes.len() > k - s + 1 {
             s_mer_hashes.pop_front();
         }
-        
+
         // Update blockmer k-mers (k+l length) if we have enough bases
         if i >= blockmer_k - 1 {
             rolling_kmer_f_blockmer <<= 2;
@@ -467,7 +457,9 @@ pub fn get_twin_read_syncmer(
             rolling_kmer_r_blockmer |= nuc_r << blockmer_reverse_shift_dist;
 
             // Check if blockmer is in the set
-            if blockmer_set.contains(&rolling_kmer_f_blockmer) || blockmer_set.contains(&rolling_kmer_r_blockmer) {
+            if blockmer_set.contains(&rolling_kmer_f_blockmer)
+                || blockmer_set.contains(&rolling_kmer_r_blockmer)
+            {
                 // Check quality of the l suffix bases
                 let mut all_suffix_bases_good = true;
                 if let Some(qualities) = qualities.as_ref() {
@@ -491,19 +483,20 @@ pub fn get_twin_read_syncmer(
                     blockmer_positions.push((i + 1 - blockmer_k) as u32);
                     if blockmer_set.contains(&rolling_kmer_f_blockmer) {
                         if log::log_enabled!(log::Level::Trace) {
-                            debug_blockmers.push(decode_kmer64(rolling_kmer_f_blockmer, (k + l) as u8));
+                            debug_blockmers
+                                .push(decode_kmer64(rolling_kmer_f_blockmer, (k + l) as u8));
                         }
                         blockmer_canon.push(true);
                     } else {
                         if log::log_enabled!(log::Level::Trace) {
-                            debug_blockmers.push(decode_kmer64(rolling_kmer_r_blockmer, (k + l) as u8));
+                            debug_blockmers
+                                .push(decode_kmer64(rolling_kmer_r_blockmer, (k + l) as u8));
                         }
                         blockmer_canon.push(false);
                     }
                 }
             }
         }
-
 
         // Check SNPmer
         if snpmer_set.contains(&canonical_kmer_marker) {
@@ -514,17 +507,19 @@ pub fn get_twin_read_syncmer(
                 60
             };
 
-            if mid_base_qval > minimum_bq|| read_with_all_equal_qualities {
+            if mid_base_qval > minimum_bq || read_with_all_equal_qualities {
                 //snpmers_in_read.push((i + 1 - k, canonical_kmer_marker));
                 snpmer_positions.push((i + 1 - k) as u32);
                 snpmer_kmers.push(canonical_kmer_marker);
             }
-            if DEDUP_SNPMERS{
-                *dedup_snpmers.entry(canonical_kmer_marker & split_mask).or_insert(0) += 1;
+            if DEDUP_SNPMERS {
+                *dedup_snpmers
+                    .entry(canonical_kmer_marker & split_mask)
+                    .or_insert(0) += 1;
             }
         }
         // Check for minimizer using syncmer method
-       if i >= k - 1 && s_mer_hashes.len() == k - s + 1 {
+        if i >= k - 1 && s_mer_hashes.len() == k - s + 1 {
             let middle_idx = (k - s) / 2;
             let middle_hash = s_mer_hashes[middle_idx];
 
@@ -536,21 +531,26 @@ pub fn get_twin_read_syncmer(
                 }
             }
 
-            if syncmer{
+            if syncmer {
                 minimizer_positions.push((i + 1 - k) as u32);
                 minimizer_kmers.push(Kmer48::from(canonical_kmer_marker));
             }
         }
     }
 
-    if blockmer_set.len() > 0{
-        log::trace!("Read ID: {}, Blockmers found so far: {}, {:?}", id,  debug_blockmers.len(), debug_blockmers);
+    if blockmer_set.len() > 0 {
+        log::trace!(
+            "Read ID: {}, Blockmers found so far: {}, {:?}",
+            id,
+            debug_blockmers.len(),
+            debug_blockmers
+        );
     }
 
     let mut no_dup_snpmers_kmers = vec![];
     let mut no_dup_snpmers_positions = vec![];
-    if DEDUP_SNPMERS{
-        for i in 0..snpmer_kmers.len(){
+    if DEDUP_SNPMERS {
+        for i in 0..snpmer_kmers.len() {
             if dedup_snpmers[&(snpmer_kmers[i] & split_mask)] == 1 {
                 no_dup_snpmers_kmers.push(Kmer48::from_u64(snpmer_kmers[i]));
                 no_dup_snpmers_positions.push(snpmer_positions[i]);
@@ -560,73 +560,80 @@ pub fn get_twin_read_syncmer(
 
     let snpmer_kmers = no_dup_snpmers_kmers;
     let snpmer_positions_final;
-    if DEDUP_SNPMERS{
+    if DEDUP_SNPMERS {
         snpmer_positions_final = no_dup_snpmers_positions;
-    }
-    else{
+    } else {
         snpmer_positions_final = snpmer_positions;
     }
 
     let seq_id;
-    if read_with_all_equal_qualities{
+    if read_with_all_equal_qualities {
         seq_id = None;
-    }
-    else{
+    } else {
         seq_id = estimate_sequence_identity_vec(qualities.as_ref());
     }
 
-    let mut qual_seq : Option<Seq<QualCompact3>> = None;
-    if let Some(qualities) = qualities{
+    let mut qual_seq: Option<Seq<QualCompact3>> = None;
+    if let Some(qualities) = qualities {
         let mut binned_qualities = vec![];
         let bin_size = QUALITY_SEQ_BIN;
         let mut counter = 0;
         let mut min_qual = 255;
 
         // Set the bin quality to the lowest of every 10 bases
-        for i in 0..qualities.len(){
-            if counter == bin_size{
+        for i in 0..qualities.len() {
+            if counter == bin_size {
                 binned_qualities.push(min_qual);
                 counter = 0;
                 min_qual = 255;
             }
             counter += 1;
-            if qualities[i] < min_qual{
+            if qualities[i] < min_qual {
                 min_qual = qualities[i];
             }
         }
 
-        if counter != 0{
+        if counter != 0 {
             binned_qualities.push(min_qual);
         }
         qual_seq = Some(binned_qualities.try_into().unwrap());
     }
 
     let dna_seq: Seq<Dna>;
-    let dna_seq_opt : Result<Seq<Dna>, _> = string.clone().try_into();
-    if dna_seq_opt.is_err(){
-        let fixed_string = string.iter().map(|b| {
-            let upper = b.to_ascii_uppercase();
-            if upper == b'N' || upper == b'n' {
-                b'A' // Replace 'N' with 'A'
-            }
-            else {
-                if upper != b'A' && upper != b'C' && upper != b'G' && upper != b'T' {
-                    log::warn!("Non-ACGT base {} found in read {}. Replacing with A.", *b as char, id);
-                    b'A'
+    let dna_seq_opt: Result<Seq<Dna>, _> = string.clone().try_into();
+    if dna_seq_opt.is_err() {
+        let fixed_string = string
+            .iter()
+            .map(|b| {
+                let upper = b.to_ascii_uppercase();
+                if upper == b'N' || upper == b'n' {
+                    b'A' // Replace 'N' with 'A'
+                } else {
+                    if upper != b'A' && upper != b'C' && upper != b'G' && upper != b'T' {
+                        log::warn!(
+                            "Non-ACGT base {} found in read {}. Replacing with A.",
+                            *b as char,
+                            id
+                        );
+                        b'A'
+                    } else {
+                        upper
+                    }
                 }
-                else{
-                    upper
-                }
-            }
-        }).collect::<Vec<u8>>();
-        dna_seq = fixed_string.try_into().expect(format!("Failed to convert a read to ACGT sequence for {}. Exiting.", id).as_str());
-    }
-    else{
+            })
+            .collect::<Vec<u8>>();
+        dna_seq = fixed_string.try_into().expect(
+            format!(
+                "Failed to convert a read to ACGT sequence for {}. Exiting.",
+                id
+            )
+            .as_str(),
+        );
+    } else {
         dna_seq = dna_seq_opt.unwrap();
     }
 
-
-    Some(TwinRead{
+    Some(TwinRead {
         //snpmer_kmers,
         snpmer_positions: snpmer_positions_final,
         snpmer_kmers,
@@ -654,7 +661,6 @@ pub fn get_twin_read_syncmer(
         lsh_signatures: vec![],
         file_idx: 0,
     })
-
 }
 
 // pub fn get_twin_read(
@@ -721,15 +727,15 @@ pub fn get_twin_read_syncmer(
 
 //         let split_f = rolling_kmer_f_marker & split_mask;
 //         let split_r = rolling_kmer_r_marker & split_mask;
-    
+
 //         let canonical_marker = split_f < split_r;
-//         let canonical_kmer_marker; 
+//         let canonical_kmer_marker;
 //         if canonical_marker {
 //             canonical_kmer_marker = rolling_kmer_f_marker;
 //         } else {
 //             canonical_kmer_marker = rolling_kmer_r_marker;
 //         };
-        
+
 //         if snpmer_set.contains(&canonical_kmer_marker){
 //             //Estimate mid base quality
 //             let mid_base_qval;
@@ -738,7 +744,7 @@ pub fn get_twin_read_syncmer(
 //                 // pos = 2, k = 5, i = 6, mid_pos = 4
 //                 // We want mid = pos + k/2
 //                 // So mid = i - k + 1 + k/2
-//                 // The middle quality val will be at k/2 + i. 
+//                 // The middle quality val will be at k/2 + i.
 //                 let mid = i + 1 + mid_k - k;
 //                 mid_base_qval = qualities[mid] - 33;
 //             }
@@ -864,9 +870,8 @@ pub fn blockmer_kmers(
     let k_mask = MarkerBits::MAX >> (std::mem::size_of::<MarkerBits>() * 8 - 2 * k);
     let k_reverse_shift_dist = 2 * (k - 1);
 
-
     // Initialize rolling k-mer for anchor
-    for i in 0..k-1 {
+    for i in 0..k - 1 {
         let nuc_f = BYTE_TO_SEQ[string[i] as usize] as u64;
         let nuc_r = 3 - nuc_f;
         rolling_kmer_f <<= 2;
@@ -876,7 +881,7 @@ pub fn blockmer_kmers(
     }
 
     // Scan through sequence
-    for i in k-1..string.len() {
+    for i in k - 1..string.len() {
         // Update rolling k-mer
         let nuc_byte = string[i] as usize;
         let nuc_f = BYTE_TO_SEQ[nuc_byte] as u64;
@@ -977,7 +982,7 @@ pub fn split_kmer_mid(
     qualities: Option<Vec<u8>>,
     k: usize,
     minimum_bq: u8,
-) -> Vec<u64>{
+) -> Vec<u64> {
     type MarkerBits = u64;
     if string.len() < k {
         return vec![];
@@ -985,7 +990,7 @@ pub fn split_kmer_mid(
     let mut split_kmers = Vec::with_capacity(string.len() - k + 3);
 
     let marker_k = k;
-    if marker_k % 2 != 1 || k > 31{
+    if marker_k % 2 != 1 || k > 31 {
         panic!("k must be odd and <= 31");
     }
     let mut rolling_kmer_f_marker: MarkerBits = 0;
@@ -996,24 +1001,23 @@ pub fn split_kmer_mid(
     //split representation 11|11|11|00|11|11|11 for k = 6 and marker_k = 7
     let marker_mask = MarkerBits::MAX >> (std::mem::size_of::<MarkerBits>() * 8 - 2 * marker_k);
     let marker_rev_mask = !(3 << (2 * marker_k - 2));
-    let split_mask = !(3 << (k-1));
+    let split_mask = !(3 << (k - 1));
     let _split_mask_extract = !split_mask;
     let len = string.len();
     let mid_k = k / 2;
     let mut positions_to_skip = FxHashSet::default();
-    if let Some(qualities) = qualities.as_ref(){
+    if let Some(qualities) = qualities.as_ref() {
         //Ensure that not all qualities are the same value. If they are, possibly it is an old pacbio run... ignore them
         let mut q_iter = qualities.iter();
         let first_q = q_iter.next().unwrap();
-        if !q_iter.all(|q| q == first_q){
-            for i in marker_k-1..qualities.len(){
+        if !q_iter.all(|q| q == first_q) {
+            for i in marker_k - 1..qualities.len() {
                 let mid_pos = i + 1 + mid_k - k;
-                if qualities[mid_pos] - 33 < minimum_bq{
+                if qualities[mid_pos] - 33 < minimum_bq {
                     positions_to_skip.insert(i);
                 }
             }
         }
-        
     }
 
     for i in 0..marker_k - 1 {
@@ -1025,7 +1029,7 @@ pub fn split_kmer_mid(
         rolling_kmer_r_marker |= nuc_r << marker_reverse_shift_dist;
     }
 
-    for i in marker_k-1..len {
+    for i in marker_k - 1..len {
         let nuc_byte = string[i] as usize;
         let nuc_f = BYTE_TO_SEQ[nuc_byte] as u64;
         let nuc_r = 3 - nuc_f;
@@ -1040,19 +1044,19 @@ pub fn split_kmer_mid(
         let split_r = rolling_kmer_r_marker & split_mask;
 
         //Palindromes can mess things up because the middle base
-        //is automatically a SNPmer. 
-        if split_f == split_r{
+        //is automatically a SNPmer.
+        if split_f == split_r {
             continue;
         }
 
         // Skip low-identity mid bases
-        if positions_to_skip.contains(&i){
+        if positions_to_skip.contains(&i) {
             continue;
         }
 
         let canonical_marker = split_f < split_r;
-        let canonical_kmer_marker; 
-        //let mid_base; 
+        let canonical_kmer_marker;
+        //let mid_base;
         if canonical_marker {
             canonical_kmer_marker = rolling_kmer_f_marker;
             //mid_base = (rolling_kmer_f_marker & split_mask_extract) >> (k-1) as u64;

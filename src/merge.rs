@@ -11,7 +11,9 @@ use std::path::Path;
 fn djb2_hash(seq: &[u8]) -> u64 {
     let mut h: u64 = 5381;
     for &b in seq {
-        h = h.wrapping_mul(33).wrapping_add(b.to_ascii_uppercase() as u64);
+        h = h
+            .wrapping_mul(33)
+            .wrapping_add(b.to_ascii_uppercase() as u64);
     }
     h
 }
@@ -61,9 +63,13 @@ fn feature_table_from_dir(dir: &Path) -> Option<(Vec<String>, HashMap<String, Ve
     let n_samples = sample_names.len();
     let mut depths: HashMap<String, Vec<u64>> = HashMap::new();
     for line in lines {
-        if line.is_empty() || line.starts_with('#') { continue; }
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
         let fields: Vec<&str> = line.split('\t').collect();
-        if fields.is_empty() { continue; }
+        if fields.is_empty() {
+            continue;
+        }
         let otu_id = fields[0].to_string();
         let per_sample: Vec<u64> = (1..=n_samples)
             .map(|i| fields.get(i).and_then(|v| v.parse().ok()).unwrap_or(0))
@@ -75,9 +81,19 @@ fn feature_table_from_dir(dir: &Path) -> Option<(Vec<String>, HashMap<String, Ve
 }
 
 fn depth_from_header_total(header: &str) -> u64 {
-    let token = header.split_whitespace().next().unwrap_or("").split('_').last().unwrap_or("0");
+    let token = header
+        .split_whitespace()
+        .next()
+        .unwrap_or("")
+        .split('_')
+        .last()
+        .unwrap_or("0");
     // Sum dash-separated per-sample depths if present (pooled format)
-    token.split('-').filter_map(|s| s.parse::<u64>().ok()).sum::<u64>().max(0)
+    token
+        .split('-')
+        .filter_map(|s| s.parse::<u64>().ok())
+        .sum::<u64>()
+        .max(0)
 }
 
 // ── taxonomy TSV parsing ──────────────────────────────────────────────────────
@@ -96,7 +112,13 @@ fn read_asv_mapping_keys(path: &Path) -> std::io::Result<Vec<(String, String)>> 
     let cols: Vec<&str> = header_line.split('\t').collect();
 
     const QIIME_ORDER: &[&str] = &[
-        "superkingdom", "phylum", "class", "order", "family", "genus", "species",
+        "superkingdom",
+        "phylum",
+        "class",
+        "order",
+        "family",
+        "genus",
+        "species",
     ];
     let level_indices: Vec<Option<usize>> = QIIME_ORDER
         .iter()
@@ -105,11 +127,16 @@ fn read_asv_mapping_keys(path: &Path) -> std::io::Result<Vec<(String, String)>> 
 
     let mut pairs = Vec::new();
     for line in lines.flatten() {
-        if line.is_empty() { continue; }
+        if line.is_empty() {
+            continue;
+        }
         let fields: Vec<&str> = line.split('\t').collect();
-        if fields.is_empty() { continue; }
+        if fields.is_empty() {
+            continue;
+        }
         let asv_header = fields[0].to_string();
-        let lineage = level_indices.iter()
+        let lineage = level_indices
+            .iter()
             .filter_map(|opt| opt.and_then(|i| fields.get(i)).map(|v| v.to_string()))
             .collect::<Vec<_>>()
             .join(";");
@@ -127,11 +154,15 @@ fn write_feature_table(
 ) -> std::io::Result<()> {
     let mut f = std::fs::File::create(path)?;
     write!(f, "#OTU ID")?;
-    for s in sample_names { write!(f, "\t{}", s)?; }
+    for s in sample_names {
+        write!(f, "\t{}", s)?;
+    }
     writeln!(f)?;
     for (hash, (_, counts)) in table {
         write!(f, "{}", hash)?;
-        for &c in counts { write!(f, "\t{}", c)?; }
+        for &c in counts {
+            write!(f, "\t{}", c)?;
+        }
         writeln!(f)?;
     }
     Ok(())
@@ -206,7 +237,10 @@ fn write_asv_taxonomy_file(
     let mut f = std::fs::File::create(path)?;
     writeln!(f, "Feature ID\tTaxon")?;
     for hash in asv_table.keys() {
-        let lineage = hash_to_lineage.get(hash).map(|s| s.as_str()).unwrap_or("Unclassified");
+        let lineage = hash_to_lineage
+            .get(hash)
+            .map(|s| s.as_str())
+            .unwrap_or("Unclassified");
         writeln!(f, "{}\t{}", hash, lineage)?;
     }
     Ok(())
@@ -233,7 +267,8 @@ fn fuzzy_merge_table(
     const MAX_LEN_DIFF: usize = 10;
 
     // Compute unique minimizers per sequence
-    let minimizers: HashMap<String, Vec<u64>> = table.keys()
+    let minimizers: HashMap<String, Vec<u64>> = table
+        .keys()
         .map(|h| (h.clone(), compute_minimizers(&table[h].0)))
         .collect();
 
@@ -253,47 +288,63 @@ fn fuzzy_merge_table(
     let mut absorbed: HashSet<String> = HashSet::new();
 
     for hash in &sorted_hashes {
-        if absorbed.contains(hash) { continue; }
+        if absorbed.contains(hash) {
+            continue;
+        }
         let kmers = &minimizers[hash];
-        if kmers.is_empty() { continue; }
+        if kmers.is_empty() {
+            continue;
+        }
         let seq_len = table[hash].0.len();
 
         // Intersect candidate sets for all of the query's minimizers.
         // Start from the smallest list to minimise work.
-        let seed_kmer = kmers.iter()
+        let seed_kmer = kmers
+            .iter()
             .min_by_key(|&&k| inverted.get(&k).map_or(0, |s| s.len()))
             .unwrap();
-        let mut candidates: HashSet<String> = inverted
-            .get(seed_kmer)
-            .cloned()
-            .unwrap_or_default();
+        let mut candidates: HashSet<String> = inverted.get(seed_kmer).cloned().unwrap_or_default();
 
         for &kmer in kmers {
-            if candidates.is_empty() { break; }
+            if candidates.is_empty() {
+                break;
+            }
             match inverted.get(&kmer) {
                 Some(set) => candidates.retain(|h| set.contains(h)),
-                None => { candidates.clear(); break; }
+                None => {
+                    candidates.clear();
+                    break;
+                }
             }
         }
 
         // Keep only unabsorbed candidates that are longer (or equal) and within 10 bp
         candidates.remove(hash);
         candidates.retain(|h| {
-            if absorbed.contains(h) { return false; }
+            if absorbed.contains(h) {
+                return false;
+            }
             let clen = table[h].0.len();
             clen >= seq_len && clen - seq_len <= MAX_LEN_DIFF
         });
 
-        if candidates.is_empty() { continue; }
-        else{
+        if candidates.is_empty() {
+            continue;
+        } else {
             log::debug!(
                 "Merging {} candidates into {}: {} ({} bp) → {} candidates within {} bp",
-                candidates.len(), hash, hash, seq_len, candidates.len(), MAX_LEN_DIFF
+                candidates.len(),
+                hash,
+                hash,
+                seq_len,
+                candidates.len(),
+                MAX_LEN_DIFF
             );
         }
 
         // Representative = highest total depth among candidates
-        let best = candidates.iter()
+        let best = candidates
+            .iter()
             .max_by_key(|h| table[h.as_str()].1.iter().sum::<u64>())
             .unwrap()
             .clone();
@@ -329,7 +380,9 @@ fn fuzzy_merge_table(
     if n_absorbed > 0 {
         log::info!(
             "Fuzzy merge: {} → {} unique ASVs ({} near-identical sequences absorbed)",
-            n_before, table.len(), n_absorbed,
+            n_before,
+            table.len(),
+            n_absorbed,
         );
     }
     n_absorbed
@@ -388,7 +441,8 @@ pub fn export(args: &cli::ExportArgs) {
         match load_fasta_with_needletail(&fasta_path) {
             Ok(seqs) => {
                 for (header, seq) in &seqs {
-                    let token = header.trim_start_matches('>')
+                    let token = header
+                        .trim_start_matches('>')
                         .split_whitespace()
                         .next()
                         .unwrap_or("")
@@ -397,7 +451,8 @@ pub fn export(args: &cli::ExportArgs) {
                     token_to_hash.insert(token.clone(), hash.clone());
 
                     // Use feature-table.tsv depths; fall back to FASTA header total depth
-                    let per_col_depths: Vec<u64> = ft_depths.get(&token)
+                    let per_col_depths: Vec<u64> = ft_depths
+                        .get(&token)
                         .cloned()
                         .unwrap_or_else(|| vec![depth_from_header_total(header)]);
 
@@ -423,7 +478,8 @@ pub fn export(args: &cli::ExportArgs) {
                 Ok(pairs) => {
                     for (header_token, lineage) in pairs {
                         if let Some(hash) = token_to_hash.get(&header_token) {
-                            hash_to_lineage.entry(hash.clone())
+                            hash_to_lineage
+                                .entry(hash.clone())
                                 .or_insert_with(|| lineage.clone());
                         }
                     }
@@ -433,15 +489,20 @@ pub fn export(args: &cli::ExportArgs) {
         }
     }
 
-    log::info!("Loaded {} input directories ({} total sample columns), {} unique ASVs",
-        n_dirs, total_cols, asv_table.len());
+    log::info!(
+        "Loaded {} input directories ({} total sample columns), {} unique ASVs",
+        n_dirs,
+        total_cols,
+        asv_table.len()
+    );
 
     // ── apply --relabel ───────────────────────────────────────────────────────
     if let Some(ref labels) = args.relabel {
         if labels.len() != total_cols {
             log::error!(
                 "--relabel: {} label(s) provided for {} total sample column(s); counts must match",
-                labels.len(), total_cols,
+                labels.len(),
+                total_cols,
             );
             std::process::exit(1);
         }
@@ -461,10 +522,11 @@ pub fn export(args: &cli::ExportArgs) {
         if !dups.is_empty() {
             dups.sort_unstable();
             dups.dedup();
+            log::warn!("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
             log::warn!(
-                "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
-            log::warn!(
-                 "WARNING: DUPLICATE SAMPLE NAMES DETECTED: [{}]", dups.join(", "));
+                "WARNING: DUPLICATE SAMPLE NAMES DETECTED: [{}]",
+                dups.join(", ")
+            );
             log::warn!("Duplicate column names in merged outputs will produce incorrect results in downstream tools.");
             log::warn!("Use --relabel to assign unique names.");
             log::warn!("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
@@ -485,19 +547,27 @@ pub fn export(args: &cli::ExportArgs) {
     log::info!("Wrote {}", ft_path.display());
 
     let rs_path = output_dir.join("merged_rep_seqs.fasta");
-    write_rep_seqs(&asv_table, &rs_path)
-        .expect("Failed to write merged_rep_seqs.fasta");
+    write_rep_seqs(&asv_table, &rs_path).expect("Failed to write merged_rep_seqs.fasta");
     log::info!("Wrote {}", rs_path.display());
 
     // ── write taxonomy outputs ────────────────────────────────────────────────
     let asv_tax_path = output_dir.join("merged_asv_taxonomy.tsv");
     write_asv_taxonomy_file(&asv_table, &hash_to_lineage, &asv_tax_path)
         .expect("Failed to write merged_asv_taxonomy.tsv");
-    log::info!("Wrote {} ({} ASVs classified)", asv_tax_path.display(), hash_to_lineage.len());
+    log::info!(
+        "Wrote {} ({} ASVs classified)",
+        asv_tax_path.display(),
+        hash_to_lineage.len()
+    );
 
     let taxon_counts_path = output_dir.join("merged_taxon_counts.tsv");
-    write_taxon_table(&asv_table, &hash_to_lineage, &sample_names, &taxon_counts_path)
-        .expect("Failed to write merged_taxon_counts.tsv");
+    write_taxon_table(
+        &asv_table,
+        &hash_to_lineage,
+        &sample_names,
+        &taxon_counts_path,
+    )
+    .expect("Failed to write merged_taxon_counts.tsv");
     log::info!("Wrote {}", taxon_counts_path.display());
 
     log::info!(
@@ -554,8 +624,11 @@ mod tests {
     fn test_seq_hash_rc_canonical() {
         let fwd = b"ACGTTGCAACGT";
         let rc = crate::utils::reverse_complement(fwd);
-        assert_eq!(seq_hash(fwd), seq_hash(&rc),
-            "seq_hash must return the same value for a sequence and its reverse complement");
+        assert_eq!(
+            seq_hash(fwd),
+            seq_hash(&rc),
+            "seq_hash must return the same value for a sequence and its reverse complement"
+        );
     }
 
     // ── depth_from_header ─────────────────────────────────────────────────────
@@ -577,12 +650,19 @@ mod tests {
     fn test_compute_minimizers_nonempty() {
         let seq: Vec<u8> = b"ACGT".iter().cycle().take(200).cloned().collect();
         let mins = compute_minimizers(&seq);
-        assert!(!mins.is_empty(), "200 bp sequence should yield non-empty minimizers");
+        assert!(
+            !mins.is_empty(),
+            "200 bp sequence should yield non-empty minimizers"
+        );
         // Verify deduplication: no duplicates
         let mut sorted = mins.clone();
         sorted.sort_unstable();
         sorted.dedup();
-        assert_eq!(mins.len(), sorted.len(), "minimizers should be deduplicated");
+        assert_eq!(
+            mins.len(),
+            sorted.len(),
+            "minimizers should be deduplicated"
+        );
     }
 
     // ── fuzzy_merge_table ─────────────────────────────────────────────────────
@@ -608,8 +688,14 @@ mod tests {
         let n_absorbed = fuzzy_merge_table(&mut table, &mut hash_to_lineage);
 
         assert_eq!(n_absorbed, 1, "s1 should be absorbed into s2");
-        assert!(!table.contains_key(&h1), "h1 should be removed after absorption");
-        assert!(table.contains_key(&h2), "h2 should remain as representative");
+        assert!(
+            !table.contains_key(&h1),
+            "h1 should be removed after absorption"
+        );
+        assert!(
+            table.contains_key(&h2),
+            "h2 should remain as representative"
+        );
 
         let (_, counts) = &table[&h2];
         assert_eq!(counts[0], 3, "counts[0] should be summed");
@@ -661,7 +747,10 @@ mod tests {
         let mut hash_to_lineage: HashMap<String, String> = HashMap::new();
         let n_absorbed = fuzzy_merge_table(&mut table, &mut hash_to_lineage);
 
-        assert_eq!(n_absorbed, 0, "length diff > MAX_LEN_DIFF should prevent merge");
+        assert_eq!(
+            n_absorbed, 0,
+            "length diff > MAX_LEN_DIFF should prevent merge"
+        );
         assert_eq!(table.len(), 2, "both sequences should remain");
     }
 

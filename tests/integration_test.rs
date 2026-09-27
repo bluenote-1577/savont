@@ -20,10 +20,14 @@ fn run_asv(reads: &str) -> TempDir {
     Command::cargo_bin("savont")
         .unwrap()
         .args([
-            "asv", reads,
-            "-o", tmp.path().to_str().unwrap(),
-            "-t", "4",
-            "--min-cluster-size", "5",
+            "asv",
+            reads,
+            "-o",
+            tmp.path().to_str().unwrap(),
+            "-t",
+            "4",
+            "--min-cluster-size",
+            "5",
         ])
         .assert()
         .success();
@@ -51,9 +55,11 @@ fn emu_db() -> Option<PathBuf> {
 /// To enable these tests, run: savont download --location tests/data --dbs silva-138.2
 fn silva_db() -> Option<PathBuf> {
     let db = Path::new(SILVA_DB_PATH);
-    let has_fasta = fs::read_dir(db).ok()?.filter_map(|e| e.ok())
-        .any(|e| e.file_name().to_str()
-            .map_or(false, |n| n.ends_with(".fasta.gz") || n.ends_with(".fasta")));
+    let has_fasta = fs::read_dir(db).ok()?.filter_map(|e| e.ok()).any(|e| {
+        e.file_name()
+            .to_str()
+            .map_or(false, |n| n.ends_with(".fasta.gz") || n.ends_with(".fasta"))
+    });
     if has_fasta {
         Some(db.to_path_buf())
     } else {
@@ -70,9 +76,11 @@ fn silva_db() -> Option<PathBuf> {
 /// To enable these tests, run: savont download --location tests/data --dbs greengenes2-2024.09
 fn gg2_db() -> Option<PathBuf> {
     let db = Path::new(GG2_DB_PATH);
-    let has_fasta = fs::read_dir(db).ok()?.filter_map(|e| e.ok())
-        .any(|e| e.file_name().to_str()
-            .map_or(false, |n| n.ends_with(".fa.gz") || n.ends_with(".fa")));
+    let has_fasta = fs::read_dir(db).ok()?.filter_map(|e| e.ok()).any(|e| {
+        e.file_name()
+            .to_str()
+            .map_or(false, |n| n.ends_with(".fa.gz") || n.ends_with(".fa"))
+    });
     if has_fasta {
         Some(db.to_path_buf())
     } else {
@@ -96,11 +104,7 @@ fn test_asv_generation_and_perfect_alignment() {
     // --- 1. run savont asv ---
     Command::cargo_bin("savont")
         .unwrap()
-        .args([
-            "asv", READS_FQ,
-            "-o", out_dir,
-            "-t", "4",
-        ])
+        .args(["asv", READS_FQ, "-o", out_dir, "-t", "4"])
         .assert()
         .success();
 
@@ -128,9 +132,7 @@ fn test_asv_generation_and_perfect_alignment() {
             .expect("minimap2 mapping failed");
 
         // Keep only the primary hit (lowest NM / highest score comes first)
-        let primary = hits
-            .iter()
-            .find(|h| h.is_primary);
+        let primary = hits.iter().find(|h| h.is_primary);
 
         match primary {
             None => { /* unmapped – will be caught by the mapped == asvs.len() assert */ }
@@ -179,7 +181,10 @@ fn test_download_and_load_emu_database() {
         .success();
 
     let db_dir = tmp.path().join("emu");
-    assert!(db_dir.join("species_taxid.fasta").exists(), "species_taxid.fasta missing");
+    assert!(
+        db_dir.join("species_taxid.fasta").exists(),
+        "species_taxid.fasta missing"
+    );
     assert!(db_dir.join("taxonomy.tsv").exists(), "taxonomy.tsv missing");
     assert!(db_dir.join(".savont_db").exists(), "marker file missing");
 
@@ -204,14 +209,24 @@ fn test_download_and_load_silva_database() {
         .success();
 
     let db_dir = tmp.path().join("silva-138.2");
-    let has_fasta = fs::read_dir(&db_dir).unwrap().filter_map(|e| e.ok())
-        .any(|e| e.file_name().to_str()
-            .map_or(false, |n| n.ends_with(".fasta.gz") || n.ends_with(".fasta")));
+    let has_fasta = fs::read_dir(&db_dir)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .any(|e| {
+            e.file_name()
+                .to_str()
+                .map_or(false, |n| n.ends_with(".fasta.gz") || n.ends_with(".fasta"))
+        });
     assert!(has_fasta, "no FASTA file found after download");
 
-    let has_taxmap = fs::read_dir(&db_dir).unwrap().filter_map(|e| e.ok())
-        .any(|e| e.file_name().to_str()
-            .map_or(false, |n| n.starts_with("taxmap_") && n.ends_with(".txt")));
+    let has_taxmap = fs::read_dir(&db_dir)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .any(|e| {
+            e.file_name()
+                .to_str()
+                .map_or(false, |n| n.starts_with("taxmap_") && n.ends_with(".txt"))
+        });
     assert!(has_taxmap, "no taxmap file found after download");
 
     let db = savont::databases::load_database(&db_dir)
@@ -234,18 +249,32 @@ fn test_download_and_load_gtdb_database() {
         .success();
 
     let db_dir = tmp.path().join("gtdb-r232");
-    let has_fna = fs::read_dir(&db_dir).unwrap().filter_map(|e| e.ok())
-        .any(|e| e.file_name().to_str().map_or(false, |n| n.ends_with(".fna.gz")));
+    let has_fna = fs::read_dir(&db_dir)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .any(|e| {
+            e.file_name()
+                .to_str()
+                .map_or(false, |n| n.ends_with(".fna.gz"))
+        });
     assert!(has_fna, "no .fna.gz file found after download");
 
     let db = savont::databases::load_database(&db_dir)
         .expect("Failed to load GTDB database via registry");
     assert!(!db.taxonomy.is_empty(), "GTDB taxonomy map is empty");
 
-    let bad: Vec<_> = db.taxonomy.values()
+    let bad: Vec<_> = db
+        .taxonomy
+        .values()
         .filter(|e| e.superkingdom.is_empty())
-        .take(5).map(|e| e.tax_id.clone()).collect();
-    assert!(bad.is_empty(), "GTDB entries missing superkingdom: {:?}", bad);
+        .take(5)
+        .map(|e| e.tax_id.clone())
+        .collect();
+    assert!(
+        bad.is_empty(),
+        "GTDB entries missing superkingdom: {:?}",
+        bad
+    );
 }
 
 /// Parse a small hand-crafted GTDB FASTA header without hitting the network,
@@ -278,8 +307,8 @@ g__Thermoproteus;s__Thermoproteus tenax [location=1..1200] [ssu_len=1200]"
         writeln!(f, "TTTT").unwrap();
     }
 
-    let db = savont::taxonomy::Database::load_gtdb(tmp.path())
-        .expect("load_gtdb failed on mock file");
+    let db =
+        savont::taxonomy::Database::load_gtdb(tmp.path()).expect("load_gtdb failed on mock file");
 
     assert_eq!(db.taxonomy.len(), 2);
 
@@ -319,8 +348,11 @@ fn test_merge_feature_table() {
         .unwrap()
         .args([
             "export",
-            "-i", tmp1.path().to_str().unwrap(), tmp2.path().to_str().unwrap(),
-            "-o", merge_out.path().to_str().unwrap(),
+            "-i",
+            tmp1.path().to_str().unwrap(),
+            tmp2.path().to_str().unwrap(),
+            "-o",
+            merge_out.path().to_str().unwrap(),
         ])
         .assert()
         .success();
@@ -332,24 +364,41 @@ fn test_merge_feature_table() {
     let content = fs::read_to_string(&ft_path).unwrap();
     let lines: Vec<&str> = content.lines().collect();
     assert!(lines.len() >= 2, "feature table has fewer than 2 lines");
-    assert!(lines[0].starts_with("#OTU ID\t"), "header row should start with #OTU ID");
+    assert!(
+        lines[0].starts_with("#OTU ID\t"),
+        "header row should start with #OTU ID"
+    );
 
     let n_cols = lines[0].split('\t').count();
-    assert_eq!(n_cols, 3, "expected #OTU ID + 2 sample columns, got {}", n_cols);
+    assert_eq!(
+        n_cols, 3,
+        "expected #OTU ID + 2 sample columns, got {}",
+        n_cols
+    );
 
     // All data rows: 3 tab-separated fields, last two are non-negative integers.
     for line in &lines[1..] {
         let fields: Vec<&str> = line.split('\t').collect();
-        assert_eq!(fields.len(), 3, "data row has wrong column count: {:?}", line);
-        fields[1].parse::<u64>().expect("sample-1 count is not an integer");
-        fields[2].parse::<u64>().expect("sample-2 count is not an integer");
+        assert_eq!(
+            fields.len(),
+            3,
+            "data row has wrong column count: {:?}",
+            line
+        );
+        fields[1]
+            .parse::<u64>()
+            .expect("sample-1 count is not an integer");
+        fields[2]
+            .parse::<u64>()
+            .expect("sample-2 count is not an integer");
     }
 
     // --- rep seqs exist and IDs match feature table ---
     let rs_path = merge_out.path().join("merged_rep_seqs.fasta");
     assert!(rs_path.exists(), "merged_rep_seqs.fasta not created");
 
-    let ft_ids: HashSet<String> = lines[1..].iter()
+    let ft_ids: HashSet<String> = lines[1..]
+        .iter()
         .map(|l| l.split('\t').next().unwrap().to_string())
         .collect();
     let rs_ids: HashSet<String> = fs::read_to_string(&rs_path)
@@ -358,14 +407,23 @@ fn test_merge_feature_table() {
         .filter(|l| l.starts_with('>'))
         .map(|l| l[1..].split_whitespace().next().unwrap().to_string())
         .collect();
-    assert_eq!(ft_ids, rs_ids, "feature table ASV IDs must match rep_seqs IDs");
+    assert_eq!(
+        ft_ids, rs_ids,
+        "feature table ASV IDs must match rep_seqs IDs"
+    );
 
     // --- at least some ASVs are present in both samples ---
-    let shared = lines[1..].iter().filter(|l| {
-        let f: Vec<&str> = l.split('\t').collect();
-        f[1].parse::<u64>().unwrap_or(0) > 0 && f[2].parse::<u64>().unwrap_or(0) > 0
-    }).count();
-    assert!(shared > 0, "no ASVs found in both samples — merge may be broken");
+    let shared = lines[1..]
+        .iter()
+        .filter(|l| {
+            let f: Vec<&str> = l.split('\t').collect();
+            f[1].parse::<u64>().unwrap_or(0) > 0 && f[2].parse::<u64>().unwrap_or(0) > 0
+        })
+        .count();
+    assert!(
+        shared > 0,
+        "no ASVs found in both samples — merge may be broken"
+    );
 }
 
 /// Run `savont classify` (EMU) on both replicates, merge, and verify the
@@ -385,7 +443,15 @@ fn test_merge_with_classify() {
     for tmp in [&tmp1, &tmp2] {
         Command::cargo_bin("savont")
             .unwrap()
-            .args(["classify", "-i", tmp.path().to_str().unwrap(), "-d", db_str, "-t", "4"])
+            .args([
+                "classify",
+                "-i",
+                tmp.path().to_str().unwrap(),
+                "-d",
+                db_str,
+                "-t",
+                "4",
+            ])
             .assert()
             .success();
     }
@@ -395,8 +461,11 @@ fn test_merge_with_classify() {
         .unwrap()
         .args([
             "export",
-            "-i", tmp1.path().to_str().unwrap(), tmp2.path().to_str().unwrap(),
-            "-o", merge_out.path().to_str().unwrap(),
+            "-i",
+            tmp1.path().to_str().unwrap(),
+            tmp2.path().to_str().unwrap(),
+            "-o",
+            merge_out.path().to_str().unwrap(),
         ])
         .assert()
         .success();
@@ -406,16 +475,29 @@ fn test_merge_with_classify() {
     assert!(ft_path.exists(), "merged_feature_table.tsv not created");
     let ft_content = fs::read_to_string(&ft_path).unwrap();
     let ft_lines: Vec<&str> = ft_content.lines().collect();
-    assert!(ft_lines[0].starts_with("#OTU ID\t"), "feature table header malformed");
-    assert_eq!(ft_lines[0].split('\t').count(), 3, "expected 2 sample columns");
+    assert!(
+        ft_lines[0].starts_with("#OTU ID\t"),
+        "feature table header malformed"
+    );
+    assert_eq!(
+        ft_lines[0].split('\t').count(),
+        3,
+        "expected 2 sample columns"
+    );
 
     // ASV taxonomy file must exist with correct header
     let asv_tax_path = merge_out.path().join("merged_asv_taxonomy.tsv");
     assert!(asv_tax_path.exists(), "merged_asv_taxonomy.tsv not created");
     let asv_tax = fs::read_to_string(&asv_tax_path).unwrap();
     let asv_tax_lines: Vec<&str> = asv_tax.lines().collect();
-    assert_eq!(asv_tax_lines[0], "Feature ID\tTaxon", "asv taxonomy header wrong");
-    assert!(asv_tax_lines.len() > 1, "merged_asv_taxonomy.tsv has no data rows");
+    assert_eq!(
+        asv_tax_lines[0], "Feature ID\tTaxon",
+        "asv taxonomy header wrong"
+    );
+    assert!(
+        asv_tax_lines.len() > 1,
+        "merged_asv_taxonomy.tsv has no data rows"
+    );
 }
 
 /// Run `savont sintax` (genus-level) on both replicates, merge, and verify
@@ -435,7 +517,15 @@ fn test_merge_with_sintax() {
     for tmp in [&tmp1, &tmp2] {
         Command::cargo_bin("savont")
             .unwrap()
-            .args(["sintax", "-i", tmp.path().to_str().unwrap(), "-d", db_str, "-t", "4"])
+            .args([
+                "sintax",
+                "-i",
+                tmp.path().to_str().unwrap(),
+                "-d",
+                db_str,
+                "-t",
+                "4",
+            ])
             .assert()
             .success();
     }
@@ -445,8 +535,11 @@ fn test_merge_with_sintax() {
         .unwrap()
         .args([
             "export",
-            "-i", tmp1.path().to_str().unwrap(), tmp2.path().to_str().unwrap(),
-            "-o", merge_out.path().to_str().unwrap(),
+            "-i",
+            tmp1.path().to_str().unwrap(),
+            tmp2.path().to_str().unwrap(),
+            "-o",
+            merge_out.path().to_str().unwrap(),
         ])
         .assert()
         .success();
@@ -472,8 +565,21 @@ fn check_asv_mappings_columns(dir: &Path) {
     let first_line = fs::read_to_string(&path).unwrap();
     let header = first_line.lines().next().unwrap();
     let cols: Vec<&str> = header.split('\t').collect();
-    for expected in &["asv_header", "species", "genus", "family", "order", "class", "phylum", "superkingdom"] {
-        assert!(cols.contains(expected), "asv_mappings.tsv missing column '{}'", expected);
+    for expected in &[
+        "asv_header",
+        "species",
+        "genus",
+        "family",
+        "order",
+        "class",
+        "phylum",
+        "superkingdom",
+    ] {
+        assert!(
+            cols.contains(expected),
+            "asv_mappings.tsv missing column '{}'",
+            expected
+        );
     }
 }
 
@@ -481,27 +587,49 @@ fn check_asv_mappings_columns(dir: &Path) {
 /// output structure. Soft-skips if the database is not present at tests/data/silva-138.2/.
 #[test]
 fn test_classify_with_silva() {
-    let Some(db_dir) = silva_db() else { return; };
+    let Some(db_dir) = silva_db() else {
+        return;
+    };
     let db_str = db_dir.to_str().unwrap();
 
     let tmp = run_asv(READS_FQ);
 
     Command::cargo_bin("savont")
         .unwrap()
-        .args(["classify", "-i", tmp.path().to_str().unwrap(), "-d", db_str, "-t", "4"])
+        .args([
+            "classify",
+            "-i",
+            tmp.path().to_str().unwrap(),
+            "-d",
+            db_str,
+            "-t",
+            "4",
+        ])
         .assert()
         .success();
 
     // Both abundance tables should exist
-    assert!(tmp.path().join("species_abundance.tsv").exists(), "species_abundance.tsv missing");
-    assert!(tmp.path().join("genus_abundance.tsv").exists(), "genus_abundance.tsv missing");
+    assert!(
+        tmp.path().join("species_abundance.tsv").exists(),
+        "species_abundance.tsv missing"
+    );
+    assert!(
+        tmp.path().join("genus_abundance.tsv").exists(),
+        "genus_abundance.tsv missing"
+    );
 
     // asv_mappings.tsv should have all lineage columns
     check_asv_mappings_columns(tmp.path());
 
     // At least one Zymo genus should appear in the species table
     let species = fs::read_to_string(tmp.path().join("species_abundance.tsv")).unwrap();
-    let known = ["Listeria", "Pseudomonas", "Escherichia", "Salmonella", "Staphylococcus"];
+    let known = [
+        "Listeria",
+        "Pseudomonas",
+        "Escherichia",
+        "Salmonella",
+        "Staphylococcus",
+    ];
     assert!(
         known.iter().any(|g| species.contains(g)),
         "none of the expected Zymo genera found in SILVA species table"
@@ -513,7 +641,9 @@ fn test_classify_with_silva() {
 /// Soft-skips if the database is not present at tests/data/silva-138.2/.
 #[test]
 fn test_merge_with_silva() {
-    let Some(db_dir) = silva_db() else { return; };
+    let Some(db_dir) = silva_db() else {
+        return;
+    };
     let db_str = db_dir.to_str().unwrap();
 
     let tmp1 = run_asv(READS_FQ);
@@ -522,7 +652,15 @@ fn test_merge_with_silva() {
     for tmp in [&tmp1, &tmp2] {
         Command::cargo_bin("savont")
             .unwrap()
-            .args(["classify", "-i", tmp.path().to_str().unwrap(), "-d", db_str, "-t", "4"])
+            .args([
+                "classify",
+                "-i",
+                tmp.path().to_str().unwrap(),
+                "-d",
+                db_str,
+                "-t",
+                "4",
+            ])
             .assert()
             .success();
     }
@@ -532,8 +670,11 @@ fn test_merge_with_silva() {
         .unwrap()
         .args([
             "export",
-            "-i", tmp1.path().to_str().unwrap(), tmp2.path().to_str().unwrap(),
-            "-o", merge_out.path().to_str().unwrap(),
+            "-i",
+            tmp1.path().to_str().unwrap(),
+            tmp2.path().to_str().unwrap(),
+            "-o",
+            merge_out.path().to_str().unwrap(),
         ])
         .assert()
         .success();
@@ -543,11 +684,18 @@ fn test_merge_with_silva() {
     assert!(asv_tax_path.exists(), "merged_asv_taxonomy.tsv not created");
     let asv_tax = fs::read_to_string(&asv_tax_path).unwrap();
     let asv_tax_lines: Vec<&str> = asv_tax.lines().collect();
-    assert_eq!(asv_tax_lines[0], "Feature ID\tTaxon", "asv taxonomy header wrong");
-    assert!(asv_tax_lines.len() > 1, "merged_asv_taxonomy.tsv has no data rows");
+    assert_eq!(
+        asv_tax_lines[0], "Feature ID\tTaxon",
+        "asv taxonomy header wrong"
+    );
+    assert!(
+        asv_tax_lines.len() > 1,
+        "merged_asv_taxonomy.tsv has no data rows"
+    );
 
     // Every classified row should have a semicolon-separated lineage (not bare "Unclassified")
-    let unclassified_count = asv_tax_lines[1..].iter()
+    let unclassified_count = asv_tax_lines[1..]
+        .iter()
         .filter(|l| l.split('\t').nth(1).map_or(false, |t| !t.contains(';')))
         .count();
     let total = asv_tax_lines.len() - 1;
@@ -558,13 +706,19 @@ fn test_merge_with_silva() {
 
     // Feature table and rep seqs must have matching IDs
     let ft = fs::read_to_string(merge_out.path().join("merged_feature_table.tsv")).unwrap();
-    let ft_ids: HashSet<String> = ft.lines().skip(1)
+    let ft_ids: HashSet<String> = ft
+        .lines()
+        .skip(1)
         .map(|l| l.split('\t').next().unwrap().to_string())
         .collect();
-    let tax_ids: HashSet<String> = asv_tax_lines[1..].iter()
+    let tax_ids: HashSet<String> = asv_tax_lines[1..]
+        .iter()
         .map(|l| l.split('\t').next().unwrap().to_string())
         .collect();
-    assert_eq!(ft_ids, tax_ids, "feature table IDs must match ASV taxonomy IDs");
+    assert_eq!(
+        ft_ids, tax_ids,
+        "feature table IDs must match ASV taxonomy IDs"
+    );
 }
 
 // ── GreenGenes2 classify tests ────────────────────────────────────────────────
@@ -573,25 +727,47 @@ fn test_merge_with_silva() {
 /// verify output structure. Soft-skips if not present at tests/data/greengenes2-2024.09/.
 #[test]
 fn test_classify_with_greengenes2() {
-    let Some(db_dir) = gg2_db() else { return; };
+    let Some(db_dir) = gg2_db() else {
+        return;
+    };
     let db_str = db_dir.to_str().unwrap();
 
     let tmp = run_asv(READS_FQ);
 
     Command::cargo_bin("savont")
         .unwrap()
-        .args(["classify", "-i", tmp.path().to_str().unwrap(), "-d", db_str, "-t", "4"])
+        .args([
+            "classify",
+            "-i",
+            tmp.path().to_str().unwrap(),
+            "-d",
+            db_str,
+            "-t",
+            "4",
+        ])
         .assert()
         .success();
 
-    assert!(tmp.path().join("species_abundance.tsv").exists(), "species_abundance.tsv missing");
-    assert!(tmp.path().join("genus_abundance.tsv").exists(), "genus_abundance.tsv missing");
+    assert!(
+        tmp.path().join("species_abundance.tsv").exists(),
+        "species_abundance.tsv missing"
+    );
+    assert!(
+        tmp.path().join("genus_abundance.tsv").exists(),
+        "genus_abundance.tsv missing"
+    );
 
     check_asv_mappings_columns(tmp.path());
 
     // GreenGenes2 uses d__/p__ prefixes internally but stores plain names in TaxonomyEntry
     let species = fs::read_to_string(tmp.path().join("species_abundance.tsv")).unwrap();
-    let known = ["Listeria", "Pseudomonas", "Escherichia", "Salmonella", "Staphylococcus"];
+    let known = [
+        "Listeria",
+        "Pseudomonas",
+        "Escherichia",
+        "Salmonella",
+        "Staphylococcus",
+    ];
     assert!(
         known.iter().any(|g| species.contains(g)),
         "none of the expected Zymo genera found in GreenGenes2 species table"
@@ -603,7 +779,9 @@ fn test_classify_with_greengenes2() {
 /// Soft-skips if not present at tests/data/greengenes2-2024.09/.
 #[test]
 fn test_merge_with_greengenes2() {
-    let Some(db_dir) = gg2_db() else { return; };
+    let Some(db_dir) = gg2_db() else {
+        return;
+    };
     let db_str = db_dir.to_str().unwrap();
 
     let tmp1 = run_asv(READS_FQ);
@@ -612,7 +790,15 @@ fn test_merge_with_greengenes2() {
     for tmp in [&tmp1, &tmp2] {
         Command::cargo_bin("savont")
             .unwrap()
-            .args(["classify", "-i", tmp.path().to_str().unwrap(), "-d", db_str, "-t", "4"])
+            .args([
+                "classify",
+                "-i",
+                tmp.path().to_str().unwrap(),
+                "-d",
+                db_str,
+                "-t",
+                "4",
+            ])
             .assert()
             .success();
     }
@@ -622,8 +808,11 @@ fn test_merge_with_greengenes2() {
         .unwrap()
         .args([
             "export",
-            "-i", tmp1.path().to_str().unwrap(), tmp2.path().to_str().unwrap(),
-            "-o", merge_out.path().to_str().unwrap(),
+            "-i",
+            tmp1.path().to_str().unwrap(),
+            tmp2.path().to_str().unwrap(),
+            "-o",
+            merge_out.path().to_str().unwrap(),
         ])
         .assert()
         .success();
@@ -635,21 +824,31 @@ fn test_merge_with_greengenes2() {
 
     // ASV taxonomy: IDs must match feature table, classified lineages must have semicolons
     let ft = fs::read_to_string(merge_out.path().join("merged_feature_table.tsv")).unwrap();
-    let ft_ids: HashSet<String> = ft.lines().skip(1)
+    let ft_ids: HashSet<String> = ft
+        .lines()
+        .skip(1)
         .map(|l| l.split('\t').next().unwrap().to_string())
         .collect();
 
     let asv_tax = fs::read_to_string(merge_out.path().join("merged_asv_taxonomy.tsv")).unwrap();
     let asv_tax_lines: Vec<&str> = asv_tax.lines().collect();
-    let tax_ids: HashSet<String> = asv_tax_lines[1..].iter()
+    let tax_ids: HashSet<String> = asv_tax_lines[1..]
+        .iter()
         .map(|l| l.split('\t').next().unwrap().to_string())
         .collect();
-    assert_eq!(ft_ids, tax_ids, "feature table IDs must match ASV taxonomy IDs");
+    assert_eq!(
+        ft_ids, tax_ids,
+        "feature table IDs must match ASV taxonomy IDs"
+    );
 
-    let classified = asv_tax_lines[1..].iter()
+    let classified = asv_tax_lines[1..]
+        .iter()
         .filter(|l| l.split('\t').nth(1).map_or(false, |t| t.contains(';')))
         .count();
-    assert!(classified > 0, "no classified lineages (with semicolons) in merged_asv_taxonomy");
+    assert!(
+        classified > 0,
+        "no classified lineages (with semicolons) in merged_asv_taxonomy"
+    );
 }
 
 // ── pooled-samples tests ──────────────────────────────────────────────────────
@@ -663,10 +862,16 @@ fn test_pooled_samples_asv() {
     Command::cargo_bin("savont")
         .unwrap()
         .args([
-            "asv", "--pooled-samples", READS_FQ, READS_FQ_2,
-            "-o", tmp.path().to_str().unwrap(),
-            "-t", "4",
-            "--min-cluster-size", "5",
+            "asv",
+            "--pooled-samples",
+            READS_FQ,
+            READS_FQ_2,
+            "-o",
+            tmp.path().to_str().unwrap(),
+            "-t",
+            "4",
+            "--min-cluster-size",
+            "5",
         ])
         .assert()
         .success();
@@ -678,11 +883,14 @@ fn test_pooled_samples_asv() {
     let headers: Vec<&str> = fasta.lines().filter(|l| l.starts_with('>')).collect();
     assert!(!headers.is_empty(), "no ASVs produced by --pooled-samples");
     for h in &headers {
-        let depth_part = h.split("_depth_").nth(1)
+        let depth_part = h
+            .split("_depth_")
+            .nth(1)
             .unwrap_or_else(|| panic!("header missing _depth_: {}", h));
         assert!(
             depth_part.contains('-'),
-            "pooled header should have dash-separated depths: {}", h
+            "pooled header should have dash-separated depths: {}",
+            h
         );
     }
 
@@ -691,16 +899,29 @@ fn test_pooled_samples_asv() {
     assert!(ft_path.exists(), "feature-table.tsv not created");
     let ft = fs::read_to_string(&ft_path).unwrap();
     let ft_lines: Vec<&str> = ft.lines().collect();
-    assert!(ft_lines[0].starts_with("#OTU ID\t"), "feature table header malformed");
+    assert!(
+        ft_lines[0].starts_with("#OTU ID\t"),
+        "feature table header malformed"
+    );
     assert_eq!(
-        ft_lines[0].split('\t').count(), 3,
+        ft_lines[0].split('\t').count(),
+        3,
         "expected #OTU ID + 2 sample columns in pooled feature table"
     );
     for line in &ft_lines[1..] {
         let fields: Vec<&str> = line.split('\t').collect();
-        assert_eq!(fields.len(), 3, "data row has wrong column count: {:?}", line);
-        fields[1].parse::<u64>().expect("sample-1 depth is not an integer");
-        fields[2].parse::<u64>().expect("sample-2 depth is not an integer");
+        assert_eq!(
+            fields.len(),
+            3,
+            "data row has wrong column count: {:?}",
+            line
+        );
+        fields[1]
+            .parse::<u64>()
+            .expect("sample-1 depth is not an integer");
+        fields[2]
+            .parse::<u64>()
+            .expect("sample-2 depth is not an integer");
     }
 }
 
@@ -719,17 +940,31 @@ fn test_pooled_samples_classify() {
     Command::cargo_bin("savont")
         .unwrap()
         .args([
-            "asv", "--pooled-samples", READS_FQ, READS_FQ_2,
-            "-o", tmp.path().to_str().unwrap(),
-            "-t", "4",
-            "--min-cluster-size", "5",
+            "asv",
+            "--pooled-samples",
+            READS_FQ,
+            READS_FQ_2,
+            "-o",
+            tmp.path().to_str().unwrap(),
+            "-t",
+            "4",
+            "--min-cluster-size",
+            "5",
         ])
         .assert()
         .success();
 
     Command::cargo_bin("savont")
         .unwrap()
-        .args(["classify", "-i", tmp.path().to_str().unwrap(), "-d", db_str, "-t", "4"])
+        .args([
+            "classify",
+            "-i",
+            tmp.path().to_str().unwrap(),
+            "-d",
+            db_str,
+            "-t",
+            "4",
+        ])
         .assert()
         .success();
 
@@ -746,13 +981,20 @@ fn test_pooled_samples_classify() {
         assert!(
             header.split('\t').count() >= 4,
             "{} header should have ≥4 columns for pooled classify: {}",
-            path.display(), header
+            path.display(),
+            header
         );
     }
 
     // At least one known Zymo genus must appear
     let species = fs::read_to_string(&species_path).unwrap();
-    let known = ["Listeria", "Pseudomonas", "Escherichia", "Salmonella", "Staphylococcus"];
+    let known = [
+        "Listeria",
+        "Pseudomonas",
+        "Escherichia",
+        "Salmonella",
+        "Staphylococcus",
+    ];
     assert!(
         known.iter().any(|g| species.contains(g)),
         "none of the expected Zymo genera found in pooled species_abundance.tsv"
@@ -767,10 +1009,16 @@ fn test_pooled_samples_export() {
     Command::cargo_bin("savont")
         .unwrap()
         .args([
-            "asv", "--pooled-samples", READS_FQ, READS_FQ_2,
-            "-o", tmp.path().to_str().unwrap(),
-            "-t", "4",
-            "--min-cluster-size", "5",
+            "asv",
+            "--pooled-samples",
+            READS_FQ,
+            READS_FQ_2,
+            "-o",
+            tmp.path().to_str().unwrap(),
+            "-t",
+            "4",
+            "--min-cluster-size",
+            "5",
         ])
         .assert()
         .success();
@@ -780,8 +1028,10 @@ fn test_pooled_samples_export() {
         .unwrap()
         .args([
             "export",
-            "-i", tmp.path().to_str().unwrap(),
-            "-o", export_out.path().to_str().unwrap(),
+            "-i",
+            tmp.path().to_str().unwrap(),
+            "-o",
+            export_out.path().to_str().unwrap(),
         ])
         .assert()
         .success();
@@ -791,24 +1041,33 @@ fn test_pooled_samples_export() {
     assert!(ft_path.exists(), "merged_feature_table.tsv not created");
     let ft = fs::read_to_string(&ft_path).unwrap();
     let ft_lines: Vec<&str> = ft.lines().collect();
-    assert!(ft_lines[0].starts_with("#OTU ID\t"), "merged feature table header malformed");
+    assert!(
+        ft_lines[0].starts_with("#OTU ID\t"),
+        "merged feature table header malformed"
+    );
     assert_eq!(
-        ft_lines[0].split('\t').count(), 3,
+        ft_lines[0].split('\t').count(),
+        3,
         "expected 2 sample columns when exporting a pooled-samples directory"
     );
 
     // ASV IDs in feature table and rep seqs must agree
-    let ft_ids: HashSet<String> = ft_lines[1..].iter()
+    let ft_ids: HashSet<String> = ft_lines[1..]
+        .iter()
         .map(|l| l.split('\t').next().unwrap().to_string())
         .collect();
     let rs_path = export_out.path().join("merged_rep_seqs.fasta");
     assert!(rs_path.exists(), "merged_rep_seqs.fasta not created");
-    let rs_ids: HashSet<String> = fs::read_to_string(&rs_path).unwrap()
+    let rs_ids: HashSet<String> = fs::read_to_string(&rs_path)
+        .unwrap()
         .lines()
         .filter(|l| l.starts_with('>'))
         .map(|l| l[1..].split_whitespace().next().unwrap().to_string())
         .collect();
-    assert_eq!(ft_ids, rs_ids, "feature table IDs must match rep_seqs IDs in pooled export");
+    assert_eq!(
+        ft_ids, rs_ids,
+        "feature table IDs must match rep_seqs IDs in pooled export"
+    );
 }
 
 #[test]

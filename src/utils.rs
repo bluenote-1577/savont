@@ -1,24 +1,22 @@
-use statrs::distribution::{Binomial, DiscreteCDF};
 use memory_stats::memory_stats;
+use statrs::distribution::{Binomial, DiscreteCDF};
 
 pub fn log_memory_usage(info: bool, message: &str) {
     if let Some(usage) = memory_stats() {
-        if info{
+        if info {
             log::info!(
                 "{} --- Memory usage: {:.2} GB",
                 message,
                 usage.physical_mem as f64 / 1_000_000_000.
             );
-        }
-        else{
+        } else {
             log::debug!(
                 "{} --- Memory usage: {:.2} GB",
                 message,
                 usage.physical_mem as f64 / 1_000_000_000.
             );
         }
-    }
-    else{
+    } else {
         log::info!("Memory usage: unknown (WARNING)");
     }
 }
@@ -28,9 +26,7 @@ pub fn div_rounded(a: usize, b: usize) -> usize {
     (a + b / 2) / b
 }
 
-
-
-pub fn first_word(s: &str) -> String{
+pub fn first_word(s: &str) -> String {
     s.split_whitespace().next().unwrap_or(s).to_string()
 }
 
@@ -77,7 +73,7 @@ pub fn homopolymer_compress(seq: &[u8], do_hpc: bool) -> (Vec<u8>, Vec<u8>) {
 
     let mut current_base = seq[0];
     let mut current_length = 1u8;
-    if do_hpc{
+    if do_hpc {
         for i in 1..seq.len() {
             if seq[i] == current_base && current_length < 255 {
                 // Continue the homopolymer run (cap at 255)
@@ -92,8 +88,7 @@ pub fn homopolymer_compress(seq: &[u8], do_hpc: bool) -> (Vec<u8>, Vec<u8>) {
                 current_length = 1;
             }
         }
-    }
-    else{
+    } else {
         hpc_seq.extend_from_slice(seq);
         hp_lengths.extend(vec![1u8; seq.len()]);
     }
@@ -113,7 +108,11 @@ pub fn homopolymer_compress(seq: &[u8], do_hpc: bool) -> (Vec<u8>, Vec<u8>) {
 /// Example: (b"ACGT", vec![3, 1, 1, 1]) -> b"AAACGT"
 pub fn homopolymer_decompress(hpc_seq: &[u8], hp_lengths: &[u8]) -> Vec<u8> {
     if hpc_seq.len() != hp_lengths.len() {
-        log::warn!("HPC sequence and lengths mismatch: {} vs {}", hpc_seq.len(), hp_lengths.len());
+        log::warn!(
+            "HPC sequence and lengths mismatch: {} vs {}",
+            hpc_seq.len(),
+            hp_lengths.len()
+        );
         return hpc_seq.to_vec(); // Return as-is if mismatch
     }
 
@@ -133,7 +132,11 @@ pub fn homopolymer_decompress(hpc_seq: &[u8], hp_lengths: &[u8]) -> Vec<u8> {
 /// Returns (hpc_sequence, hpc_qualities, hp_lengths)
 /// Quality strategy: use minimum quality from each homopolymer run (most conservative)
 /// Example: (b"AAACGT", [30,35,40,25,30,35]) -> (b"ACGT", [30,25,30,35], [3,1,1,1])
-pub fn homopolymer_compress_with_quality(seq: &[u8], qualities: &[u8], do_hpc: bool) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
+pub fn homopolymer_compress_with_quality(
+    seq: &[u8],
+    qualities: &[u8],
+    do_hpc: bool,
+) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
     if seq.is_empty() || seq.len() != qualities.len() {
         return (Vec::new(), Vec::new(), Vec::new());
     }
@@ -146,7 +149,7 @@ pub fn homopolymer_compress_with_quality(seq: &[u8], qualities: &[u8], do_hpc: b
     let mut current_length = 1u8;
     let mut current_min_quality = qualities[0];
 
-    if do_hpc{
+    if do_hpc {
         for i in 1..seq.len() {
             if seq[i] == current_base && current_length < 255 {
                 // Continue the homopolymer run
@@ -169,8 +172,7 @@ pub fn homopolymer_compress_with_quality(seq: &[u8], qualities: &[u8], do_hpc: b
         hpc_seq.push(current_base);
         hpc_qualities.push(current_min_quality);
         hp_lengths.push(current_length);
-    }
-    else{
+    } else {
         hpc_seq.extend_from_slice(seq);
         hpc_qualities.extend_from_slice(qualities);
         hp_lengths.extend(vec![1u8; seq.len()]);
@@ -186,7 +188,11 @@ pub fn homopolymer_compress_with_quality(seq: &[u8], qualities: &[u8], do_hpc: b
 /// Expand binned quality scores to match sequence length
 /// Takes a quality sequence iterator, multiplies by 3, adds 33 offset,
 /// expands by bin_size, and adjusts to match sequence length
-pub fn expand_binned_qualities_from_iter<I>(qual_iter: I, seq_len: usize, bin_size: usize) -> Vec<u8>
+pub fn expand_binned_qualities_from_iter<I>(
+    qual_iter: I,
+    seq_len: usize,
+    bin_size: usize,
+) -> Vec<u8>
 where
     I: Iterator<Item = u8>,
 {
@@ -194,10 +200,7 @@ where
     let qual_u8: Vec<u8> = qual_iter.map(|x| (x as u8) * 3 + 33).collect();
 
     // Expand each quality by bin_size
-    let mut expanded_quals: Vec<u8> = qual_u8
-        .iter()
-        .flat_map(|&x| vec![x; bin_size])
-        .collect();
+    let mut expanded_quals: Vec<u8> = qual_u8.iter().flat_map(|&x| vec![x; bin_size]).collect();
 
     // Adjust to match sequence length
     if expanded_quals.len() > seq_len {

@@ -1,4 +1,3 @@
-
 pub const ASV_FILE: &str = "final_asvs.fasta";
 pub const MAX_INSERTION_LENGTH: usize = 2;
 //pub const ID_CUTOFF: f64 = 0.999;
@@ -15,9 +14,11 @@ pub const MAX_BUBBLE_UNITIGS_FINAL_STAGE: usize = 5;
 pub const TS_DASHES_BLANK_COLONS_DOT_BLANK: &str = "%Y-%m-%d %H:%M:%S%.3f";
 pub const MIN_CHAIN_SCORE_COMPARE: i32 = 150;
 pub const MIN_READ_LENGTH: usize = 100;
-pub const ENDPOINT_MAPPING_FUZZ : u32 = 200;
+pub const ENDPOINT_MAPPING_FUZZ: u32 = 200;
 // seed with 42 and 31 0s
-pub const RNG_SEED: [u8; 32] = [42, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+pub const RNG_SEED: [u8; 32] = [
+    42, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+];
 pub const PSEUDOCOUNT: f64 = 3.;
 pub const ID_THRESHOLD_ITERS: usize = 3;
 //pub const IDENTITY_THRESHOLDS: [f64; ID_THRESHOLD_ITERS] = [0.995, 0.9975, 1.0];
@@ -34,8 +35,8 @@ pub const READ_BLOCK_SIZE_FOR_COVERAGE: usize = 50_000;
 pub const OVERLAP_HANG_LENGTH: usize = 750;
 pub const DEFAULT_ERR_RATE: f64 = 0.02;
 
-//At most 1/20 k-mers are snpmers. 
-pub const MAX_FRACTION_OF_SNPMERS_IN_READ: f64 = 1./20.;
+//At most 1/20 k-mers are snpmers.
+pub const MAX_FRACTION_OF_SNPMERS_IN_READ: f64 = 1. / 20.;
 pub const SUPP_ALIGNMENT_SCORE_THRESHOLD: i32 = 2000;
 
 pub const POLISHED_CONTIGS_NAME: &str = "initial_polished.fa";
@@ -54,7 +55,7 @@ pub const MAGIC_EXIST_STRING: &str = "exist";
 pub const SAMPLES: usize = 20;
 //pub const BEAM_STEPS: usize = 10;
 pub const BEAM_STEPS: usize = 10;
-pub const SAFE_LENGTH_BACK : usize = 300_000;
+pub const SAFE_LENGTH_BACK: usize = 300_000;
 pub const MAX_LENGTH_SEARCH: usize = 1_000_000;
 
 pub const MAX_SEQS_CONSENSUS: usize = 250;
@@ -66,7 +67,6 @@ pub const DEDUP_SNPMERS: bool = true;
 
 pub const LSH_NUM_TABLES: usize = 20;
 pub const LSH_BUCKET_SIZE: usize = 3;
-
 
 pub const CLI_HEADINGS: [&str; 6] = [
     "Input/Output Options",

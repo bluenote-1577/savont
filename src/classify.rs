@@ -1,19 +1,19 @@
 use crate::cli;
 use crate::constants::ASV_FILE;
-use std::path::Path;
 use crate::taxonomy;
-use std::sync::Mutex;
 use rayon::prelude::*;
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
+use std::path::Path;
+use std::sync::Mutex;
 
 /// Represents a mapping from an ASV to a database sequence
 #[derive(Debug, Clone)]
 struct AsvMapping {
     asv_idx: usize,
-    _tax_idx: String,  // Index into the unique tax_id list
+    _tax_idx: String, // Index into the unique tax_id list
     hit_reference_id: String,
-    index: usize, 
+    index: usize,
     identity: f64,
     nm: u32,
     depth: usize,
@@ -37,7 +37,11 @@ fn run_em_algorithm(
         id_to_species_map.insert(mapping.index, mapping.species.clone());
     }
 
-    log::info!("Starting EM algorithm with {} taxa and {} mappings", num_taxa, mappings.len());
+    log::info!(
+        "Starting EM algorithm with {} taxa and {} mappings",
+        num_taxa,
+        mappings.len()
+    );
 
     loop {
         iteration += 1;
@@ -56,14 +60,13 @@ fn run_em_algorithm(
 
         for (_asv_idx, asv_maps) in &asv_mappings_grouped {
             // Calculate denominator: sum of (depth * current_abundance) for all taxa this ASV maps to
-            let denominator: f64 = asv_maps.iter()
-                .map(|m| tax_abundances[m.index])
-                .sum();
+            let denominator: f64 = asv_maps.iter().map(|m| tax_abundances[m.index]).sum();
 
             if denominator > 0.0 {
                 // Distribute ASV's depth to each taxon proportionally
                 for mapping in asv_maps.iter() {
-                    let contribution = (mapping.depth as f64) * tax_abundances[mapping.index] / denominator;
+                    let contribution =
+                        (mapping.depth as f64) * tax_abundances[mapping.index] / denominator;
                     new_tax_abundances[mapping.index] += contribution;
                 }
             }
@@ -78,15 +81,21 @@ fn run_em_algorithm(
         }
 
         // Check convergence
-        let max_change = tax_abundances.iter()
+        let max_change = tax_abundances
+            .iter()
             .zip(new_tax_abundances.iter())
             .map(|(old, new)| (old - new).abs())
             .fold(0.0, f64::max);
 
-        log::debug!("EM iteration {}: max abundance change = {:.6e}", iteration, max_change);
+        log::debug!(
+            "EM iteration {}: max abundance change = {:.6e}",
+            iteration,
+            max_change
+        );
 
         // Write the 5 top most changed taxa for debugging
-        let mut changes: Vec<(usize, f64)> = tax_abundances.iter()
+        let mut changes: Vec<(usize, f64)> = tax_abundances
+            .iter()
             .zip(new_tax_abundances.iter())
             .enumerate()
             .map(|(idx, (old, new))| (idx, (old - new).abs()))
@@ -94,13 +103,22 @@ fn run_em_algorithm(
         changes.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
         log::debug!("Top 5 abundance changes:");
         for (idx, change) in changes.iter().take(5) {
-            log::debug!("  Taxon {}, Species {} : change = {:.6e}", idx, id_to_species_map.get(&idx).unwrap(), change);
+            log::debug!(
+                "  Taxon {}, Species {} : change = {:.6e}",
+                idx,
+                id_to_species_map.get(&idx).unwrap(),
+                change
+            );
         }
 
         tax_abundances = new_tax_abundances;
 
         if max_change < convergence_threshold || iteration >= MAX_ITERATIONS {
-            log::info!("EM converged after {} iterations (max change: {:.6e})", iteration, max_change);
+            log::info!(
+                "EM converged after {} iterations (max change: {:.6e})",
+                iteration,
+                max_change
+            );
             break;
         }
     }
@@ -123,7 +141,6 @@ fn collect_best_mappings(
     db: &taxonomy::Database,
     args: &cli::ClassifyArgs,
 ) -> Vec<(usize, String, f64, u32, usize, String, String)> {
-
     let fasta_str = db.fasta_path.to_str().unwrap();
     let mmi_path = format!("{}.mmi", fasta_str);
     let aligner = if Path::new(&mmi_path).exists() {
@@ -135,7 +152,11 @@ fn collect_best_mappings(
             .with_index(&mmi_path, None)
             .expect("Failed to load minimap2 index")
     } else {
-        log::info!("Building minimap2 index from {} (saving to {})", fasta_str, mmi_path);
+        log::info!(
+            "Building minimap2 index from {} (saving to {})",
+            fasta_str,
+            mmi_path
+        );
         minimap2::Aligner::builder()
             .map_ont()
             .with_index_threads(args.threads)
@@ -144,39 +165,56 @@ fn collect_best_mappings(
             .expect("Failed to build minimap2 index")
     };
 
-    log::info!("Aligning {} consensus sequences to database", consensus_sequences.len());
-
+    log::info!(
+        "Aligning {} consensus sequences to database",
+        consensus_sequences.len()
+    );
 
     let all_mappings = Mutex::new(Vec::new());
 
-    consensus_sequences.par_iter().enumerate().for_each(|(asv_idx, (header, sequence))| {
-        let asv_header = header.trim_start_matches('>').to_string();
+    consensus_sequences
+        .par_iter()
+        .enumerate()
+        .for_each(|(asv_idx, (header, sequence))| {
+            let asv_header = header.trim_start_matches('>').to_string();
 
-        // Align to database
-        let alignment_result = aligner.map(sequence, true, false, None, None, None);
+            // Align to database
+            let alignment_result = aligner.map(sequence, true, false, None, None, None);
 
-        if let Ok(mappings) = alignment_result {
-            if !mappings.is_empty() {
-                // Find the minimum NM value (best alignment quality)
-                let min_nm = mappings.first().and_then(|m| m.alignment.as_ref().map(|a| a.nm));
+            if let Ok(mappings) = alignment_result {
+                if !mappings.is_empty() {
+                    // Find the minimum NM value (best alignment quality)
+                    let min_nm = mappings
+                        .first()
+                        .and_then(|m| m.alignment.as_ref().map(|a| a.nm));
 
-                if let Some(min_nm) = min_nm {
-                    // Collect ALL mappings with the minimum NM value
-                    for mapping in mappings.iter() {
-                        if let Some(alignment) = &mapping.alignment {
-                            if alignment.nm == min_nm {
-                                let alignment_length = mapping.query_end - mapping.query_start;
-                                let identity = 100.0 * (1.0 - (alignment.nm as f64 / alignment_length as f64));
+                    if let Some(min_nm) = min_nm {
+                        // Collect ALL mappings with the minimum NM value
+                        for mapping in mappings.iter() {
+                            if let Some(alignment) = &mapping.alignment {
+                                if alignment.nm == min_nm {
+                                    let alignment_length = mapping.query_end - mapping.query_start;
+                                    let identity = 100.0
+                                        * (1.0 - (alignment.nm as f64 / alignment_length as f64));
 
-                                if let Some(db_header) = &mapping.target_name {
-                                    // Extract ID based on database type
-                                    let db_key = (db.extract_key)(db_header);
+                                    if let Some(db_header) = &mapping.target_name {
+                                        // Extract ID based on database type
+                                        let db_key = (db.extract_key)(db_header);
 
-                                    if let Some(key) = db_key {
-                                        if db.taxonomy.contains_key(&key) {
-                                            let mapping_record = (asv_idx, key, identity, alignment.nm as u32, asv_depths[asv_idx], 
-                                                asv_header.clone(), (*(*mapping.target_name.as_ref().unwrap())).clone());
-                                            all_mappings.lock().unwrap().push(mapping_record);
+                                        if let Some(key) = db_key {
+                                            if db.taxonomy.contains_key(&key) {
+                                                let mapping_record = (
+                                                    asv_idx,
+                                                    key,
+                                                    identity,
+                                                    alignment.nm as u32,
+                                                    asv_depths[asv_idx],
+                                                    asv_header.clone(),
+                                                    (*(*mapping.target_name.as_ref().unwrap()))
+                                                        .clone(),
+                                                );
+                                                all_mappings.lock().unwrap().push(mapping_record);
+                                            }
                                         }
                                     }
                                 }
@@ -185,8 +223,7 @@ fn collect_best_mappings(
                     }
                 }
             }
-        }
-    });
+        });
 
     all_mappings.into_inner().unwrap()
 }
@@ -204,13 +241,19 @@ fn read_feature_table_for_classify(
     let cols: Vec<&str> = header_line.split('\t').collect();
     let sample_names: Vec<String> = cols[1..].iter().map(|s| s.to_string()).collect();
     let n_samples = sample_names.len();
-    if n_samples == 0 { return None; }
+    if n_samples == 0 {
+        return None;
+    }
 
     let mut otu_depths: HashMap<String, Vec<usize>> = HashMap::new();
     for line in lines {
-        if line.is_empty() || line.starts_with('#') { continue; }
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
         let fields: Vec<&str> = line.split('\t').collect();
-        if fields.is_empty() { continue; }
+        if fields.is_empty() {
+            continue;
+        }
         let otu_id = fields[0].to_string();
         let depths: Vec<usize> = (1..=n_samples)
             .map(|i| fields.get(i).and_then(|v| v.parse().ok()).unwrap_or(0))
@@ -218,10 +261,20 @@ fn read_feature_table_for_classify(
         otu_depths.insert(otu_id, depths);
     }
 
-    let per_asv: Vec<Vec<usize>> = consensus_sequences.iter().map(|(header, _)| {
-        let token = header.trim_start_matches('>').split_whitespace().next().unwrap_or("");
-        otu_depths.get(token).cloned().unwrap_or_else(|| vec![0; n_samples])
-    }).collect();
+    let per_asv: Vec<Vec<usize>> = consensus_sequences
+        .iter()
+        .map(|(header, _)| {
+            let token = header
+                .trim_start_matches('>')
+                .split_whitespace()
+                .next()
+                .unwrap_or("");
+            otu_depths
+                .get(token)
+                .cloned()
+                .unwrap_or_else(|| vec![0; n_samples])
+        })
+        .collect();
 
     Some((sample_names, per_asv))
 }
@@ -236,23 +289,54 @@ fn write_species_abundance_pooled(
     use std::collections::BTreeMap;
     let mut file = std::fs::File::create(output_path)?;
 
-    write!(file, "species\tgenus\tfamily\torder\tclass\tphylum\tclade\tsuperkingdom")?;
-    for name in sample_names { write!(file, "\t{}", name)?; }
+    write!(
+        file,
+        "species\tgenus\tfamily\torder\tclass\tphylum\tclade\tsuperkingdom"
+    )?;
+    for name in sample_names {
+        write!(file, "\t{}", name)?;
+    }
     writeln!(file)?;
 
     let n_samples = sample_names.len();
     let sample_totals: Vec<usize> = (0..n_samples)
-        .map(|k| per_asv_per_sample.iter().map(|s| s.get(k).copied().unwrap_or(0)).sum())
+        .map(|k| {
+            per_asv_per_sample
+                .iter()
+                .map(|s| s.get(k).copied().unwrap_or(0))
+                .sum()
+        })
         .collect();
 
-    let mut taxon_per_sample: BTreeMap<String, (taxonomy::TaxonomyAssignment, Vec<f64>)> = BTreeMap::new();
+    let mut taxon_per_sample: BTreeMap<String, (taxonomy::TaxonomyAssignment, Vec<f64>)> =
+        BTreeMap::new();
     for cls in classifications {
         if let Some(ref tax) = cls.taxonomy {
-            let key = format!("{}|{}|{}|{}|{}|{}|{}|{}", tax.species, tax.genus, tax.family, tax.order, tax.class, tax.phylum, tax.clade, tax.superkingdom);
-            let asv_idx = cls.asv_id.trim_start_matches("ASV_").parse::<usize>().unwrap_or(0);
-            let entry = taxon_per_sample.entry(key).or_insert_with(|| (tax.clone(), vec![0.0; n_samples]));
+            let key = format!(
+                "{}|{}|{}|{}|{}|{}|{}|{}",
+                tax.species,
+                tax.genus,
+                tax.family,
+                tax.order,
+                tax.class,
+                tax.phylum,
+                tax.clade,
+                tax.superkingdom
+            );
+            let asv_idx = cls
+                .asv_id
+                .trim_start_matches("ASV_")
+                .parse::<usize>()
+                .unwrap_or(0);
+            let entry = taxon_per_sample
+                .entry(key)
+                .or_insert_with(|| (tax.clone(), vec![0.0; n_samples]));
             for k in 0..n_samples {
-                let depth = per_asv_per_sample.get(asv_idx).and_then(|s| s.get(k)).copied().unwrap_or(0);
+                let depth = per_asv_per_sample
+                    .get(asv_idx)
+                    .and_then(|s| s.get(k))
+                    .copied()
+                    .unwrap_or(0);
                 if sample_totals[k] > 0 {
                     entry.1[k] += depth as f64 / sample_totals[k] as f64;
                 }
@@ -262,14 +346,27 @@ fn write_species_abundance_pooled(
 
     let mut sorted: Vec<_> = taxon_per_sample.into_iter().collect();
     sorted.sort_by(|a, b| {
-        let sum_a: f64 = a.1.1.iter().sum();
-        let sum_b: f64 = b.1.1.iter().sum();
+        let sum_a: f64 = a.1 .1.iter().sum();
+        let sum_b: f64 = b.1 .1.iter().sum();
         sum_b.partial_cmp(&sum_a).unwrap()
     });
 
     for (_, (tax, abundances)) in sorted {
-        write!(file, "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}", tax.species, tax.genus, tax.family, tax.order, tax.class, tax.phylum, tax.clade, tax.superkingdom)?;
-        for &a in &abundances { write!(file, "\t{:.6}", a)?; }
+        write!(
+            file,
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            tax.species,
+            tax.genus,
+            tax.family,
+            tax.order,
+            tax.class,
+            tax.phylum,
+            tax.clade,
+            tax.superkingdom
+        )?;
+        for &a in &abundances {
+            write!(file, "\t{:.6}", a)?;
+        }
         writeln!(file)?;
     }
     Ok(())
@@ -285,23 +382,47 @@ fn write_genus_abundance_pooled(
     use std::collections::BTreeMap;
     let mut file = std::fs::File::create(output_path)?;
 
-    write!(file, "genus\tfamily\torder\tclass\tphylum\tclade\tsuperkingdom")?;
-    for name in sample_names { write!(file, "\t{}", name)?; }
+    write!(
+        file,
+        "genus\tfamily\torder\tclass\tphylum\tclade\tsuperkingdom"
+    )?;
+    for name in sample_names {
+        write!(file, "\t{}", name)?;
+    }
     writeln!(file)?;
 
     let n_samples = sample_names.len();
     let sample_totals: Vec<usize> = (0..n_samples)
-        .map(|k| per_asv_per_sample.iter().map(|s| s.get(k).copied().unwrap_or(0)).sum())
+        .map(|k| {
+            per_asv_per_sample
+                .iter()
+                .map(|s| s.get(k).copied().unwrap_or(0))
+                .sum()
+        })
         .collect();
 
-    let mut taxon_per_sample: BTreeMap<String, (taxonomy::TaxonomyAssignment, Vec<f64>)> = BTreeMap::new();
+    let mut taxon_per_sample: BTreeMap<String, (taxonomy::TaxonomyAssignment, Vec<f64>)> =
+        BTreeMap::new();
     for cls in classifications {
         if let Some(ref tax) = cls.taxonomy {
-            let key = format!("{}|{}|{}|{}|{}|{}", tax.genus, tax.family, tax.order, tax.class, tax.phylum, tax.clade);
-            let asv_idx = cls.asv_id.trim_start_matches("ASV_").parse::<usize>().unwrap_or(0);
-            let entry = taxon_per_sample.entry(key).or_insert_with(|| (tax.clone(), vec![0.0; n_samples]));
+            let key = format!(
+                "{}|{}|{}|{}|{}|{}",
+                tax.genus, tax.family, tax.order, tax.class, tax.phylum, tax.clade
+            );
+            let asv_idx = cls
+                .asv_id
+                .trim_start_matches("ASV_")
+                .parse::<usize>()
+                .unwrap_or(0);
+            let entry = taxon_per_sample
+                .entry(key)
+                .or_insert_with(|| (tax.clone(), vec![0.0; n_samples]));
             for k in 0..n_samples {
-                let depth = per_asv_per_sample.get(asv_idx).and_then(|s| s.get(k)).copied().unwrap_or(0);
+                let depth = per_asv_per_sample
+                    .get(asv_idx)
+                    .and_then(|s| s.get(k))
+                    .copied()
+                    .unwrap_or(0);
                 if sample_totals[k] > 0 {
                     entry.1[k] += depth as f64 / sample_totals[k] as f64;
                 }
@@ -311,14 +432,20 @@ fn write_genus_abundance_pooled(
 
     let mut sorted: Vec<_> = taxon_per_sample.into_iter().collect();
     sorted.sort_by(|a, b| {
-        let sum_a: f64 = a.1.1.iter().sum();
-        let sum_b: f64 = b.1.1.iter().sum();
+        let sum_a: f64 = a.1 .1.iter().sum();
+        let sum_b: f64 = b.1 .1.iter().sum();
         sum_b.partial_cmp(&sum_a).unwrap()
     });
 
     for (_, (tax, abundances)) in sorted {
-        write!(file, "{}\t{}\t{}\t{}\t{}\t{}\t{}", tax.genus, tax.family, tax.order, tax.class, tax.phylum, tax.clade, tax.superkingdom)?;
-        for &a in &abundances { write!(file, "\t{:.6}", a)?; }
+        write!(
+            file,
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            tax.genus, tax.family, tax.order, tax.class, tax.phylum, tax.clade, tax.superkingdom
+        )?;
+        for &a in &abundances {
+            write!(file, "\t{:.6}", a)?;
+        }
         writeln!(file)?;
     }
     Ok(())
@@ -328,7 +455,10 @@ pub fn classify(args: &cli::ClassifyArgs, db: &taxonomy::Database) {
     // Step 2: Load consensus sequences from clustering output
     let input_fasta = Path::new(&args.input_dir).join(ASV_FILE);
     if !input_fasta.exists() {
-        eprintln!("ERROR [savont] Input FASTA not found: {}", input_fasta.display());
+        eprintln!(
+            "ERROR [savont] Input FASTA not found: {}",
+            input_fasta.display()
+        );
         std::process::exit(1);
     }
 
@@ -341,27 +471,37 @@ pub fn classify(args: &cli::ClassifyArgs, db: &taxonomy::Database) {
             Vec::new()
         }
     };
-    
+
     log::info!("Loaded {} consensus sequences", consensus_sequences.len());
 
     // Step 3: Build aligner using database FASTA file
-    log::info!("Building minimap2 index from database FASTA: {}", db.fasta_path.display());
+    log::info!(
+        "Building minimap2 index from database FASTA: {}",
+        db.fasta_path.display()
+    );
 
     // Step 5: Collect all best mappings for each ASV
     // Read depths from feature-table.tsv if available (authoritative for pooled samples);
     // fall back to parsing FASTA headers.
     let ft_path = Path::new(&args.input_dir).join("feature-table.tsv");
-    let (ft_sample_names, per_asv_per_sample) = read_feature_table_for_classify(&ft_path, &consensus_sequences)
-        .unwrap_or_else(|| {
+    let (ft_sample_names, per_asv_per_sample) =
+        read_feature_table_for_classify(&ft_path, &consensus_sequences).unwrap_or_else(|| {
             let depths = taxonomy::extract_depths_from_headers(&consensus_sequences);
-            (vec!["sample".to_string()], depths.iter().map(|&d| vec![d]).collect())
+            (
+                vec!["sample".to_string()],
+                depths.iter().map(|&d| vec![d]).collect(),
+            )
         });
 
     let asv_depths: Vec<usize> = per_asv_per_sample.iter().map(|s| s.iter().sum()).collect();
     let total_reads: usize = asv_depths.iter().sum();
 
     let all_mappings = collect_best_mappings(&consensus_sequences, &asv_depths, &db, &args);
-    log::info!("Collected {} total mappings from {} ASVs", all_mappings.len(), consensus_sequences.len());
+    log::info!(
+        "Collected {} total mappings from {} ASVs",
+        all_mappings.len(),
+        consensus_sequences.len()
+    );
 
     // Step 6: Build tax_id index and mapping matrix
     let mut tax_id_to_idx: HashMap<String, usize> = HashMap::new();
@@ -378,23 +518,31 @@ pub fn classify(args: &cli::ClassifyArgs, db: &taxonomy::Database) {
     log::info!("Found {} unique taxonomic IDs", idx_to_tax_id.len());
 
     // Convert mappings to indexed format
-    let mappings: Vec<AsvMapping> = all_mappings.iter()
-        .map(|(asv_idx, tax_id, identity, nm, depth, _, hit_reference_id)| AsvMapping {
-            asv_idx: *asv_idx,
-            _tax_idx: tax_id.clone(),
-            index: *tax_id_to_idx.get(tax_id).unwrap(),
-            hit_reference_id: hit_reference_id.clone(),
-            identity: *identity,
-            nm: *nm,
-            depth: *depth,
-            species: db.taxonomy.get(tax_id).unwrap().species.clone(),
-        })
+    let mappings: Vec<AsvMapping> = all_mappings
+        .iter()
+        .map(
+            |(asv_idx, tax_id, identity, nm, depth, _, hit_reference_id)| AsvMapping {
+                asv_idx: *asv_idx,
+                _tax_idx: tax_id.clone(),
+                index: *tax_id_to_idx.get(tax_id).unwrap(),
+                hit_reference_id: hit_reference_id.clone(),
+                identity: *identity,
+                nm: *nm,
+                depth: *depth,
+                species: db.taxonomy.get(tax_id).unwrap().species.clone(),
+            },
+        )
         .collect();
 
     // Step 7: Run EM algorithm to distribute abundances
     log::info!("Running EM algorithm to distribute abundances");
     let convergence_threshold = 0.1 / total_reads as f64;
-    let tax_abundances = run_em_algorithm(&mappings, idx_to_tax_id.len(), total_reads, convergence_threshold);
+    let tax_abundances = run_em_algorithm(
+        &mappings,
+        idx_to_tax_id.len(),
+        total_reads,
+        convergence_threshold,
+    );
 
     // Step 8: Build classifications from EM results
     let mut classifications: Vec<taxonomy::AsvClassification> = Vec::new();
@@ -403,16 +551,25 @@ pub fn classify(args: &cli::ClassifyArgs, db: &taxonomy::Database) {
     for asv_idx in 0..consensus_sequences.len() {
         let (header, _) = &consensus_sequences[asv_idx];
         let asv_id = format!("ASV_{}", asv_idx);
-        let asv_header = header.trim_start_matches('>').split_whitespace().next().unwrap_or("").to_string();
+        let asv_header = header
+            .trim_start_matches('>')
+            .split_whitespace()
+            .next()
+            .unwrap_or("")
+            .to_string();
 
         // Find all mappings for this ASV
-        let asv_mappings: Vec<&AsvMapping> = mappings.iter()
-            .filter(|m| m.asv_idx == asv_idx)
-            .collect();
+        let asv_mappings: Vec<&AsvMapping> =
+            mappings.iter().filter(|m| m.asv_idx == asv_idx).collect();
 
         if !asv_mappings.is_empty() {
             // Log all top hits for this ASV
-            log::debug!("ASV {} ({} depth, {} total hits):", asv_id, asv_depths[asv_idx], asv_mappings.len());
+            log::debug!(
+                "ASV {} ({} depth, {} total hits):",
+                asv_id,
+                asv_depths[asv_idx],
+                asv_mappings.len()
+            );
 
             // Sort mappings by EM abundance (descending) to show best hits first
             let mut sorted_mappings = asv_mappings.clone();
@@ -426,7 +583,12 @@ pub fn classify(args: &cli::ClassifyArgs, db: &taxonomy::Database) {
                 let tax_id = &idx_to_tax_id[mapping.index];
                 log::debug!(
                     "  Hit #{}: tax_id={}, species={}, identity={:.2}%, nm={}, EM_abundance={:.6}",
-                    rank + 1, tax_id, mapping.species, mapping.identity, mapping.nm, tax_abundances[mapping.index]
+                    rank + 1,
+                    tax_id,
+                    mapping.species,
+                    mapping.identity,
+                    mapping.nm,
+                    tax_abundances[mapping.index]
                 );
 
                 let taxonomy_entry = db.taxonomy.get(tax_id).unwrap();
@@ -451,7 +613,8 @@ pub fn classify(args: &cli::ClassifyArgs, db: &taxonomy::Database) {
             }
 
             // Take the mapping with highest EM-estimated abundance (or first if tied)
-            let best_mapping = asv_mappings.iter()
+            let best_mapping = asv_mappings
+                .iter()
                 .max_by(|a, b| {
                     tax_abundances[a.index]
                         .partial_cmp(&tax_abundances[b.index])
@@ -513,18 +676,31 @@ pub fn classify(args: &cli::ClassifyArgs, db: &taxonomy::Database) {
 
     let species_file = output_dir_path.join("species_abundance.tsv");
     if ft_sample_names.len() > 1 {
-        write_species_abundance_pooled(&classifications, &per_asv_per_sample, &ft_sample_names, &species_file)
-            .expect("Failed to write species abundance file");
+        write_species_abundance_pooled(
+            &classifications,
+            &per_asv_per_sample,
+            &ft_sample_names,
+            &species_file,
+        )
+        .expect("Failed to write species abundance file");
     } else {
         taxonomy::write_species_abundance(&classifications, &species_file)
             .expect("Failed to write species abundance file");
     }
-    log::info!("Wrote species abundance table to {}", species_file.display());
+    log::info!(
+        "Wrote species abundance table to {}",
+        species_file.display()
+    );
 
     let genus_file = output_dir_path.join("genus_abundance.tsv");
     if ft_sample_names.len() > 1 {
-        write_genus_abundance_pooled(&classifications, &per_asv_per_sample, &ft_sample_names, &genus_file)
-            .expect("Failed to write genus abundance file");
+        write_genus_abundance_pooled(
+            &classifications,
+            &per_asv_per_sample,
+            &ft_sample_names,
+            &genus_file,
+        )
+        .expect("Failed to write genus abundance file");
     } else {
         taxonomy::write_genus_abundance(&classifications, &genus_file)
             .expect("Failed to write genus abundance file");
@@ -536,27 +712,38 @@ pub fn classify(args: &cli::ClassifyArgs, db: &taxonomy::Database) {
         .expect("Failed to write ASV mappings file");
     log::info!("Wrote ASV mappings table to {}", mappings_file.display());
 
-    log::info!("Classification complete! Classified {}/{} ASVs",
-        classifications.iter().filter(|c| c.taxonomy.is_some()).count(),
-        classifications.len());
+    log::info!(
+        "Classification complete! Classified {}/{} ASVs",
+        classifications
+            .iter()
+            .filter(|c| c.taxonomy.is_some())
+            .count(),
+        classifications.len()
+    );
 
     // Classified X species at species and genus level
-    log::info!("Classified {}/{} ASVs at species level",
-        classifications.iter()
+    log::info!(
+        "Classified {}/{} ASVs at species level",
+        classifications
+            .iter()
             .filter(|c| {
                 if let Some(tax) = &c.taxonomy {
                     !tax.species.is_empty() && !tax.species.contains("UNCLASSIFIED")
                 } else {
                     false
                 }
-
             })
             .count(),
-        classifications.iter().filter(|c| c.taxonomy.is_some()).count(),
-        );
+        classifications
+            .iter()
+            .filter(|c| c.taxonomy.is_some())
+            .count(),
+    );
 
-    log::info!("Classified {}/{} ASVs at genus level",
-        classifications.iter()
+    log::info!(
+        "Classified {}/{} ASVs at genus level",
+        classifications
+            .iter()
             .filter(|c| {
                 if let Some(tax) = &c.taxonomy {
                     !tax.genus.is_empty() && !tax.genus.contains("UNCLASSIFIED")
@@ -564,9 +751,10 @@ pub fn classify(args: &cli::ClassifyArgs, db: &taxonomy::Database) {
                     false
                 }
             })
-            .count(), 
-            classifications.iter().filter(|c| c.taxonomy.is_some()).count(),
-        );
-
-
+            .count(),
+        classifications
+            .iter()
+            .filter(|c| c.taxonomy.is_some())
+            .count(),
+    );
 }

@@ -14,7 +14,12 @@ pub fn download(args: &cli::DownloadArgs) {
             std::process::exit(1);
         }
 
-        log::info!("Downloading '{}' ({}) to {} ...", kw, def.description, dest.display());
+        log::info!(
+            "Downloading '{}' ({}) to {} ...",
+            kw,
+            def.description,
+            dest.display()
+        );
 
         match (def.download)(&dest) {
             Ok(()) => {

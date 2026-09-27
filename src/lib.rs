@@ -1,22 +1,22 @@
+pub mod kmer_comp;
 pub mod seeding;
 pub mod types;
-pub mod kmer_comp;
 //pub mod mapping;
 pub mod cli;
 pub mod constants;
 //pub mod polishing_mod;
 pub mod seq_parse;
 //pub mod map_processing;
-pub mod utils;
-pub mod asv_cluster;
 pub mod alignment;
+pub mod asv_cluster;
 pub mod chimera;
-pub mod taxonomy;
-pub mod databases;
 pub mod classify;
-pub mod sintax;
-pub mod merge;
+pub mod databases;
 pub mod download;
+pub mod merge;
+pub mod sintax;
+pub mod taxonomy;
+pub mod utils;
 
 //pub mod cbloom;
 //
@@ -27,6 +27,6 @@ pub mod download;
 
 // Use of a mod or pub mod is not actually necessary.
 pub mod built_info {
-   // The file has been placed there by the build script.
-   // include!(concat!(env!("OUT_DIR"), "/built.rs"));
+    // The file has been placed there by the build script.
+    // include!(concat!(env!("OUT_DIR"), "/built.rs"));
 }

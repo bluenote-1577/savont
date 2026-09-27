@@ -1,10 +1,10 @@
-use crate::types::*;
 use crate::cli::ClusterArgs as Cli;
+use crate::types::*;
 use crate::utils;
 use minimap2::{Aligner, Strand};
 use rayon::prelude::*;
-use std::sync::Mutex;
 use std::collections::HashMap;
+use std::sync::Mutex;
 
 /// Represents a chimeric consensus sequence
 #[derive(Debug, Clone)]
@@ -34,23 +34,25 @@ struct BestAlignments {
 /// 3. Its right portion matches a different parent perfectly (excluding indels)
 /// 4. The two parents are <99% similar to each other
 /// 5. Combined, the matches cover >=95% of the query
-pub fn detect_chimeras(
-    consensuses: &mut [ConsensusSequence],
-    args: &Cli,
-) -> Vec<ChimeraInfo> {
+pub fn detect_chimeras(consensuses: &mut [ConsensusSequence], args: &Cli) -> Vec<ChimeraInfo> {
     if consensuses.is_empty() {
         return Vec::new();
     }
 
-    log::info!("Starting chimera detection for {} consensuses", consensuses.len());
+    log::info!(
+        "Starting chimera detection for {} consensuses",
+        consensuses.len()
+    );
 
     // Calculate pairwise similarities between all consensuses (for the <99% check)
     let similarities = calculate_pairwise_similarities(consensuses, args);
-    let chimera_scores : Mutex<HashMap<usize, f64, _>> = Mutex::new(HashMap::new());
+    let chimera_scores: Mutex<HashMap<usize, f64, _>> = Mutex::new(HashMap::new());
 
     let chimeras = Mutex::new(Vec::new());
-    let min_match_length = args.chimera_detect_length.unwrap_or(args.min_read_length / 10);
-    if min_match_length < 10{
+    let min_match_length = args
+        .chimera_detect_length
+        .unwrap_or(args.min_read_length / 10);
+    if min_match_length < 10 {
         log::warn!("Chimera detection match length is set to a very low value of {} < 10. This may lead to false positives.", min_match_length);
     }
 
@@ -250,14 +252,15 @@ pub fn detect_chimeras(
         }
     });
 
-
-
     for i in 0..consensuses.len() {
         if !chimera_scores.lock().unwrap().contains_key(&i) {
             chimera_scores.lock().unwrap().insert(i, 0.0);
-        }
-        else{
-            log::debug!("Consensus {} chimera score: {:.4}", consensuses[i].id, chimera_scores.lock().unwrap()[&i]);
+        } else {
+            log::debug!(
+                "Consensus {} chimera score: {:.4}",
+                consensuses[i].id,
+                chimera_scores.lock().unwrap()[&i]
+            );
             consensuses[i].chimera_score = Some(chimera_scores.lock().unwrap()[&i] as i64);
         }
     }
@@ -282,7 +285,6 @@ fn calculate_match_lengths(
     rc: bool,
     args: &Cli,
 ) -> (Option<usize>, Option<usize>) {
-    
     // Track match positions in the query
     let mut left_max_perfect = 0;
     let mut right_max_perfect = 0;
@@ -295,7 +297,7 @@ fn calculate_match_lengths(
         let mut target_pos = target_start;
 
         for &(length, op) in cigar {
-            if num_errs > args.chimera_allowable_errors{
+            if num_errs > args.chimera_allowable_errors {
                 break;
             }
             let len = length as usize;
@@ -306,11 +308,12 @@ fn calculate_match_lengths(
                         if query_pos + i < query_seq.len() && target_pos + i < target_seq.len() {
                             if query_seq[query_pos + i] == target_seq[target_pos + i] {
                                 left_max_perfect += 1;
-                            }
-                            else{
+                            } else {
                                 // Elevated error rates near the edges: PCR primer mismatches and polishing issues...
                                 num_errs += 1;
-                                if num_errs > args.chimera_allowable_errors && query_pos + i >= pcr_slack{
+                                if num_errs > args.chimera_allowable_errors
+                                    && query_pos + i >= pcr_slack
+                                {
                                     break;
                                 }
                             }
@@ -334,7 +337,6 @@ fn calculate_match_lengths(
         }
     }
 
-    
     {
         let mut query_pos_right = query_end;
         let mut target_pos_right = target_end;
@@ -342,7 +344,7 @@ fn calculate_match_lengths(
 
         // Process CIGAR to find matching positions
         for &(length, op) in cigar.iter().rev() {
-            if num_errs > args.chimera_allowable_errors{
+            if num_errs > args.chimera_allowable_errors {
                 break;
             }
             let len = length as usize;
@@ -350,12 +352,15 @@ fn calculate_match_lengths(
                 0 => {
                     // Match or mismatch - check actual bases NEED -1 because the intervals are [start,end)
                     for i in 0..len {
-                        if query_seq[query_pos_right - i - 1] == target_seq[target_pos_right - i - 1] {
+                        if query_seq[query_pos_right - i - 1]
+                            == target_seq[target_pos_right - i - 1]
+                        {
                             right_max_perfect += 1;
-                        }
-                        else{
+                        } else {
                             num_errs += 1;
-                            if num_errs > args.chimera_allowable_errors && query_pos_right - i + pcr_slack <= query_seq.len(){
+                            if num_errs > args.chimera_allowable_errors
+                                && query_pos_right - i + pcr_slack <= query_seq.len()
+                            {
                                 break;
                             }
                         }
@@ -380,7 +385,9 @@ fn calculate_match_lengths(
 
     let mut right_max_perfect_opt = Some(right_max_perfect);
     let mut left_max_perfect_opt = Some(left_max_perfect);
-    let min_match_length = args.chimera_detect_length.unwrap_or((args.min_read_length / 10).max(100));
+    let min_match_length = args
+        .chimera_detect_length
+        .unwrap_or((args.min_read_length / 10).max(100));
 
     if right_max_perfect < min_match_length || left_max_perfect >= right_max_perfect {
         right_max_perfect_opt = None;
@@ -390,10 +397,9 @@ fn calculate_match_lengths(
         left_max_perfect_opt = None;
     }
 
-    if rc{
+    if rc {
         (right_max_perfect_opt, left_max_perfect_opt)
-    }
-    else{
+    } else {
         (left_max_perfect_opt, right_max_perfect_opt)
     }
 }
@@ -406,18 +412,23 @@ fn calculate_pairwise_similarities(
 ) -> HashMap<(usize, usize), f64> {
     let similarities = Mutex::new(HashMap::new());
 
-    log::info!("Calculating pairwise similarities for {} consensuses (using decompressed sequences)", consensuses.len());
+    log::info!(
+        "Calculating pairwise similarities for {} consensuses (using decompressed sequences)",
+        consensuses.len()
+    );
 
     consensuses.par_iter().enumerate().for_each(|(i, cons_i)| {
-        let seq_i = cons_i.decompressed_sequence.as_ref()
+        let seq_i = cons_i
+            .decompressed_sequence
+            .as_ref()
             .expect("Consensus sequence must be decompressed before chimera detection");
 
         // Align cons_i to cons_j (using decompressed sequences)
-            let aligner = Aligner::builder()
-                .lrhq()
-                .with_cigar()
-                .with_seq(seq_i)
-                .expect("Failed to create aligner");
+        let aligner = Aligner::builder()
+            .lrhq()
+            .with_cigar()
+            .with_seq(seq_i)
+            .expect("Failed to create aligner");
 
         let depth_i = cons_i.depth;
 
@@ -428,21 +439,23 @@ fn calculate_pairwise_similarities(
 
             let depth_j = cons_j.depth;
 
-            // Only calculate similarity for pairs that have sufficient depth difference 
+            // Only calculate similarity for pairs that have sufficient depth difference
             // (to save time, and because similar-depth consensuses are unlikely to be chimeras of each other)
             if depth_i > depth_j * 25 {
                 continue;
             }
 
-            let seq_j = cons_j.decompressed_sequence.as_ref()
+            let seq_j = cons_j
+                .decompressed_sequence
+                .as_ref()
                 .expect("Consensus sequence must be decompressed before chimera detection");
 
-            
             if let Ok(mappings) = aligner.map(seq_j, false, false, None, None, None) {
                 if let Some(best_mapping) = mappings.first() {
                     if let Some(ref alignment) = best_mapping.alignment {
                         // Calculate identity as 1 - (NM / alignment_length)
-                        let alignment_len = (best_mapping.query_end - best_mapping.query_start) as f64;
+                        let alignment_len =
+                            (best_mapping.query_end - best_mapping.query_start) as f64;
                         let nm = alignment.nm as f64;
 
                         let identity = if alignment_len > 0.0 {
@@ -466,22 +479,35 @@ pub fn filter_chimeras(
     consensuses: Vec<ConsensusSequence>,
     chimeras: &[ChimeraInfo],
 ) -> Vec<ConsensusSequence> {
-    let chimera_indices: std::collections::HashSet<usize> = chimeras.iter()
-        .map(|c| c.query_idx)
-        .collect();
+    let chimera_indices: std::collections::HashSet<usize> =
+        chimeras.iter().map(|c| c.query_idx).collect();
 
     let original_count = consensuses.len();
 
-    let average_chimera_score: f64 = chimera_indices.iter()
-        .filter_map(|&idx| consensuses.get(idx).and_then(|c| c.chimera_score.map(|s| s as f64)))
-        .sum::<f64>() / chimera_indices.len() as f64;
+    let average_chimera_score: f64 = chimera_indices
+        .iter()
+        .filter_map(|&idx| {
+            consensuses
+                .get(idx)
+                .and_then(|c| c.chimera_score.map(|s| s as f64))
+        })
+        .sum::<f64>()
+        / chimera_indices.len() as f64;
 
-    let std_chimera_score: f64 = (chimera_indices.iter()
-        .filter_map(|&idx| consensuses.get(idx).and_then(|c| c.chimera_score.map(|s| s as f64)))
+    let std_chimera_score: f64 = (chimera_indices
+        .iter()
+        .filter_map(|&idx| {
+            consensuses
+                .get(idx)
+                .and_then(|c| c.chimera_score.map(|s| s as f64))
+        })
         .map(|score| (score - average_chimera_score).powi(2))
-        .sum::<f64>() / chimera_indices.len() as f64).sqrt();
+        .sum::<f64>()
+        / chimera_indices.len() as f64)
+        .sqrt();
 
-    let filtered: Vec<ConsensusSequence> = consensuses.into_iter()
+    let filtered: Vec<ConsensusSequence> = consensuses
+        .into_iter()
         .enumerate()
         .filter(|(idx, _)| !chimera_indices.contains(idx))
         .map(|(_, cons)| cons)

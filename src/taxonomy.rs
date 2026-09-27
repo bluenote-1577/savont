@@ -1,8 +1,8 @@
+use flate2::read::GzDecoder;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
-use flate2::read::GzDecoder;
 
 /// Represents a taxonomic entry from the database
 #[derive(Debug, Clone)]
@@ -76,7 +76,10 @@ impl Database {
 
             let fields: Vec<&str> = line.split('\t').collect();
             if fields.len() < 12 {
-                log::warn!("Skipping malformed line {}: insufficient fields", line_num + 1);
+                log::warn!(
+                    "Skipping malformed line {}: insufficient fields",
+                    line_num + 1
+                );
                 continue;
             }
 
@@ -108,28 +111,36 @@ impl Database {
             .filter_map(|e| e.ok())
             .map(|e| e.path())
             .find(|p| {
-                p.extension().and_then(|e| e.to_str()) == Some("fasta") ||
-                p.file_name().and_then(|n| n.to_str()).map_or(false, |n| n.ends_with(".fasta.gz")) || 
-                p.file_name().and_then(|n| n.to_str()).map_or(false, |n| n.ends_with(".fa.gz"))
+                p.extension().and_then(|e| e.to_str()) == Some("fasta")
+                    || p.file_name()
+                        .and_then(|n| n.to_str())
+                        .map_or(false, |n| n.ends_with(".fasta.gz"))
+                    || p.file_name()
+                        .and_then(|n| n.to_str())
+                        .map_or(false, |n| n.ends_with(".fa.gz"))
             })
-            .ok_or_else(|| std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                format!("No FASTA file found in {}", db_dir.display()),
-            ))?;
+            .ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    format!("No FASTA file found in {}", db_dir.display()),
+                )
+            })?;
 
         // Find taxonomy TSV file (taxmap_*.txt or taxmap_*.txt.gz)
         let taxonomy_path = std::fs::read_dir(db_dir)?
             .filter_map(|e| e.ok())
             .map(|e| e.path())
             .find(|p| {
-                p.file_name()
-                    .and_then(|n| n.to_str())
-                    .map_or(false, |n| n.starts_with("taxmap_") && (n.ends_with(".txt") || n.ends_with(".txt.gz")))
+                p.file_name().and_then(|n| n.to_str()).map_or(false, |n| {
+                    n.starts_with("taxmap_") && (n.ends_with(".txt") || n.ends_with(".txt.gz"))
+                })
             })
-            .ok_or_else(|| std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                format!("No taxmap file found in {}", db_dir.display()),
-            ))?;
+            .ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    format!("No taxmap file found in {}", db_dir.display()),
+                )
+            })?;
 
         log::info!("Loading Silva taxonomy from {}", taxonomy_path.display());
         let taxonomy = Self::load_silva_taxonomy(&taxonomy_path)?;
@@ -161,7 +172,10 @@ impl Database {
 
             let fields: Vec<&str> = line.split('\t').collect();
             if fields.len() < 6 {
-                log::warn!("Skipping malformed Silva line {}: insufficient fields", line_num + 1);
+                log::warn!(
+                    "Skipping malformed Silva line {}: insufficient fields",
+                    line_num + 1
+                );
                 continue;
             }
 
@@ -210,25 +224,39 @@ impl Database {
             .filter_map(|e| e.ok())
             .map(|e| e.path())
             .find(|p| {
-                p.file_name()
-                    .and_then(|n| n.to_str())
-                    .map_or(false, |n| n.ends_with(".fna.gz") || n.ends_with(".fna") || n.ends_with(".fa.gz") || n.ends_with(".fasta.gz"))
+                p.file_name().and_then(|n| n.to_str()).map_or(false, |n| {
+                    n.ends_with(".fna.gz")
+                        || n.ends_with(".fna")
+                        || n.ends_with(".fa.gz")
+                        || n.ends_with(".fasta.gz")
+                })
             })
-            .ok_or_else(|| std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                format!("No .fna.gz FASTA file found in {}", db_dir.display()),
-            ))?;
+            .ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    format!("No .fna.gz FASTA file found in {}", db_dir.display()),
+                )
+            })?;
 
-        log::info!("Loading GTDB taxonomy from FASTA headers: {}", fasta_path.display());
+        log::info!(
+            "Loading GTDB taxonomy from FASTA headers: {}",
+            fasta_path.display()
+        );
         let taxonomy = Self::load_gtdb_taxonomy_from_fasta(&fasta_path)?;
         log::info!("Loaded {} GTDB taxonomy entries", taxonomy.len());
 
-        Ok(Database { fasta_path, taxonomy, extract_key: extract_gtdb_key_from_header })
+        Ok(Database {
+            fasta_path,
+            taxonomy,
+            extract_key: extract_gtdb_key_from_header,
+        })
     }
 
     /// Parse taxonomy from GTDB FASTA headers.
     /// Header format: >REF_NAME d__Domain;p__Phylum;...;s__Genus species [location=...] ...
-    fn load_gtdb_taxonomy_from_fasta(path: &Path) -> Result<HashMap<String, TaxonomyEntry>, std::io::Error> {
+    fn load_gtdb_taxonomy_from_fasta(
+        path: &Path,
+    ) -> Result<HashMap<String, TaxonomyEntry>, std::io::Error> {
         let file = File::open(path)?;
         let reader: Box<dyn BufRead> = if path.to_str().map_or(false, |s| s.ends_with(".gz")) {
             Box::new(BufReader::new(GzDecoder::new(file)))
@@ -312,28 +340,37 @@ impl Database {
             .filter_map(|e| e.ok())
             .map(|e| e.path())
             .find(|p| {
-                p.file_name()
-                    .and_then(|n| n.to_str())
-                    .map_or(false, |n| {
-                        n.ends_with(".fa.gz") || n.ends_with(".fasta.gz") || n.ends_with(".fa")
-                    })
+                p.file_name().and_then(|n| n.to_str()).map_or(false, |n| {
+                    n.ends_with(".fa.gz") || n.ends_with(".fasta.gz") || n.ends_with(".fa")
+                })
             })
-            .ok_or_else(|| std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                format!("No .fa.gz file found in {}", db_dir.display()),
-            ))?;
+            .ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    format!("No .fa.gz file found in {}", db_dir.display()),
+                )
+            })?;
 
-        log::info!("Loading GreenGenes2 taxonomy from FASTA headers: {}", fasta_path.display());
+        log::info!(
+            "Loading GreenGenes2 taxonomy from FASTA headers: {}",
+            fasta_path.display()
+        );
         let taxonomy = Self::load_gg2_taxonomy_from_fasta(&fasta_path)?;
         log::info!("Loaded {} GreenGenes2 taxonomy entries", taxonomy.len());
 
-        Ok(Database { fasta_path, taxonomy, extract_key: extract_gg2_key_from_header })
+        Ok(Database {
+            fasta_path,
+            taxonomy,
+            extract_key: extract_gg2_key_from_header,
+        })
     }
 
     /// Parse GreenGenes2 taxonomy from FASTA headers.
     /// Header format: >d__Domain;p__Phylum;c__Class;o__Order;f__Family;g__Genus;s__epithet;
     /// The full header string (without '>') is used as the lookup key.
-    fn load_gg2_taxonomy_from_fasta(path: &Path) -> Result<HashMap<String, TaxonomyEntry>, std::io::Error> {
+    fn load_gg2_taxonomy_from_fasta(
+        path: &Path,
+    ) -> Result<HashMap<String, TaxonomyEntry>, std::io::Error> {
         let file = File::open(path)?;
         let reader: Box<dyn BufRead> = if path.to_str().map_or(false, |s| s.ends_with(".gz")) {
             Box::new(BufReader::new(GzDecoder::new(file)))
@@ -345,11 +382,15 @@ impl Database {
 
         for line in reader.lines() {
             let line = line?;
-            if !line.starts_with('>') { continue; }
+            if !line.starts_with('>') {
+                continue;
+            }
 
             // Key = full header without '>'
             let key = line[1..].trim().to_string();
-            if key.is_empty() { continue; }
+            if key.is_empty() {
+                continue;
+            }
 
             let mut superkingdom = String::new();
             let mut phylum = String::new();
@@ -386,16 +427,22 @@ impl Database {
             };
 
             const UNANNOTATED: &str = "Greengenes_unannotated";
-            let fill = |s: String| if s.is_empty() { UNANNOTATED.to_string() } else { s };
+            let fill = |s: String| {
+                if s.is_empty() {
+                    UNANNOTATED.to_string()
+                } else {
+                    s
+                }
+            };
 
             let entry = TaxonomyEntry {
                 tax_id: key.clone(),
-                species:      fill(species),
-                genus:        fill(genus),
-                family:       fill(family),
-                order:        fill(order),
-                class:        fill(class),
-                phylum:       fill(phylum),
+                species: fill(species),
+                genus: fill(genus),
+                family: fill(family),
+                order: fill(order),
+                class: fill(class),
+                phylum: fill(phylum),
                 clade: String::new(),
                 superkingdom: fill(superkingdom),
                 subspecies: String::new(),
@@ -413,7 +460,7 @@ impl Database {
     /// (short SH-number headers) and `unite_taxonomy.tsv` (SH_id → taxonomy string).
     pub fn load_unite(db_dir: &Path) -> Result<Self, std::io::Error> {
         let fasta_path = db_dir.join("unite_sequences.fasta");
-        let tax_path   = db_dir.join("unite_taxonomy.tsv");
+        let tax_path = db_dir.join("unite_taxonomy.tsv");
 
         if !fasta_path.exists() {
             return Err(std::io::Error::new(
@@ -430,58 +477,78 @@ impl Database {
         let taxonomy = Self::load_unite_taxonomy_from_tsv(&tax_path)?;
         log::info!("Loaded {} UNITE taxonomy entries", taxonomy.len());
 
-        Ok(Database { fasta_path, taxonomy, extract_key: extract_unite_key_from_header })
+        Ok(Database {
+            fasta_path,
+            taxonomy,
+            extract_key: extract_unite_key_from_header,
+        })
     }
 
     /// Parse the preprocessed UNITE taxonomy TSV: `sh_id\tk__X;p__X;...;s__X`
-    fn load_unite_taxonomy_from_tsv(path: &Path) -> Result<HashMap<String, TaxonomyEntry>, std::io::Error> {
+    fn load_unite_taxonomy_from_tsv(
+        path: &Path,
+    ) -> Result<HashMap<String, TaxonomyEntry>, std::io::Error> {
         let reader = BufReader::new(File::open(path)?);
         let mut taxonomy = HashMap::new();
         let mut first = true;
 
         for line in reader.lines() {
             let line = line?;
-            if first { first = false; continue; } // skip header row
+            if first {
+                first = false;
+                continue;
+            } // skip header row
 
             let mut cols = line.splitn(2, '\t');
-            let sh_id   = match cols.next() { Some(s) if !s.is_empty() => s.to_string(), _ => continue };
+            let sh_id = match cols.next() {
+                Some(s) if !s.is_empty() => s.to_string(),
+                _ => continue,
+            };
             let tax_str = cols.next().unwrap_or("");
 
             let mut kingdom = String::new();
-            let mut phylum  = String::new();
-            let mut class   = String::new();
-            let mut order   = String::new();
-            let mut family  = String::new();
-            let mut genus   = String::new();
+            let mut phylum = String::new();
+            let mut class = String::new();
+            let mut order = String::new();
+            let mut family = String::new();
+            let mut genus = String::new();
             let mut species = String::new();
 
             for level in tax_str.split(';') {
                 let level = level.trim();
-                if let Some(v) = level.strip_prefix("k__") { kingdom = v.replace('_', " "); }
-                else if let Some(v) = level.strip_prefix("p__") { phylum  = v.replace('_', " "); }
-                else if let Some(v) = level.strip_prefix("c__") { class   = v.replace('_', " "); }
-                else if let Some(v) = level.strip_prefix("o__") { order   = v.replace('_', " "); }
-                else if let Some(v) = level.strip_prefix("f__") { family  = v.replace('_', " "); }
-                else if let Some(v) = level.strip_prefix("g__") { genus   = v.replace('_', " "); }
-                else if let Some(v) = level.strip_prefix("s__") { species = v.replace('_', " "); }
+                if let Some(v) = level.strip_prefix("k__") {
+                    kingdom = v.replace('_', " ");
+                } else if let Some(v) = level.strip_prefix("p__") {
+                    phylum = v.replace('_', " ");
+                } else if let Some(v) = level.strip_prefix("c__") {
+                    class = v.replace('_', " ");
+                } else if let Some(v) = level.strip_prefix("o__") {
+                    order = v.replace('_', " ");
+                } else if let Some(v) = level.strip_prefix("f__") {
+                    family = v.replace('_', " ");
+                } else if let Some(v) = level.strip_prefix("g__") {
+                    genus = v.replace('_', " ");
+                } else if let Some(v) = level.strip_prefix("s__") {
+                    species = v.replace('_', " ");
+                }
             }
 
             const U: &str = "UNITE_unannotated";
             let fill = |s: String| if s.is_empty() { U.to_string() } else { s };
 
             let entry = TaxonomyEntry {
-                tax_id:           sh_id.clone(),
-                species:          fill(species),
-                genus:            fill(genus),
-                family:           fill(family),
-                order:            fill(order),
-                class:            fill(class),
-                phylum:           fill(phylum),
-                clade:            String::new(),
-                superkingdom:     fill(kingdom),
-                subspecies:       String::new(),
+                tax_id: sh_id.clone(),
+                species: fill(species),
+                genus: fill(genus),
+                family: fill(family),
+                order: fill(order),
+                class: fill(class),
+                phylum: fill(phylum),
+                clade: String::new(),
+                superkingdom: fill(kingdom),
+                subspecies: String::new(),
                 species_subgroup: String::new(),
-                species_group:    String::new(),
+                species_group: String::new(),
             };
             taxonomy.insert(sh_id, entry);
         }
@@ -632,8 +699,7 @@ impl TaxonomyAssignment {
                 species_subgroup: String::new(),
                 species_group: String::new(),
             }
-        }
-        else {
+        } else {
             // Below genus threshold - unclassified
             Self {
                 tax_id: entry.tax_id.clone(),
@@ -684,7 +750,11 @@ pub fn extract_gtdb_key_from_header(header: &str) -> Option<String> {
 /// Returns the full header string (trimmed), which is the taxonomy map key.
 pub fn extract_gg2_key_from_header(header: &str) -> Option<String> {
     let header = header.trim_start_matches('>').trim();
-    if header.is_empty() { None } else { Some(header.to_string()) }
+    if header.is_empty() {
+        None
+    } else {
+        Some(header.to_string())
+    }
 }
 
 /// Extract key from UNITE ITS FASTA header.
@@ -692,7 +762,11 @@ pub fn extract_gg2_key_from_header(header: &str) -> Option<String> {
 /// The entire header (no spaces) is the minimap2 target name, used as-is as the map key.
 pub fn extract_unite_key_from_header(header: &str) -> Option<String> {
     let header = header.trim_start_matches('>').trim();
-    if header.is_empty() { None } else { Some(header.to_string()) }
+    if header.is_empty() {
+        None
+    } else {
+        Some(header.to_string())
+    }
 }
 
 /// Write species-level taxonomy abundance table to TSV file
@@ -771,7 +845,10 @@ pub fn write_genus_abundance(
     )?;
 
     // Aggregate abundances by genus
-    let mut genus_abundances: HashMap<String, (String, String, String, String, String, String, String, f64)> = HashMap::new();
+    let mut genus_abundances: HashMap<
+        String,
+        (String, String, String, String, String, String, String, f64),
+    > = HashMap::new();
 
     for classification in classifications {
         if let Some(ref taxonomy) = classification.taxonomy {
@@ -789,7 +866,9 @@ pub fn write_genus_abundance(
 
             genus_abundances
                 .entry(key)
-                .and_modify(|(_, _, _, _, _, _, _, abundance)| *abundance += classification.abundance)
+                .and_modify(|(_, _, _, _, _, _, _, abundance)| {
+                    *abundance += classification.abundance
+                })
                 .or_insert((
                     taxonomy.genus.clone(),
                     taxonomy.family.clone(),
@@ -798,7 +877,7 @@ pub fn write_genus_abundance(
                     taxonomy.phylum.clone(),
                     taxonomy.clade.clone(),
                     taxonomy.superkingdom.clone(),
-                    classification.abundance
+                    classification.abundance,
                 ));
         }
     }
@@ -808,18 +887,12 @@ pub fn write_genus_abundance(
     sorted_genera.sort_by(|a, b| b.1 .7.partial_cmp(&a.1 .7).unwrap());
 
     // Write sorted genus entries
-    for (_, (genus, family, order, class, phylum, clade, superkingdom, abundance)) in sorted_genera {
+    for (_, (genus, family, order, class, phylum, clade, superkingdom, abundance)) in sorted_genera
+    {
         writeln!(
             file,
             "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
-            abundance,
-            genus,
-            family,
-            order,
-            class,
-            phylum,
-            clade,
-            superkingdom,
+            abundance, genus, family, order, class, phylum, clade, superkingdom,
         )?;
     }
 
@@ -850,7 +923,10 @@ pub fn write_asv_mappings(
                     depth_str,
                     identity,
                     classification.nm.unwrap_or(0),
-                    classification.best_hit_tax_id.as_ref().unwrap_or(&String::from("NA")),
+                    classification
+                        .best_hit_tax_id
+                        .as_ref()
+                        .unwrap_or(&String::from("NA")),
                     taxonomy.species,
                     taxonomy.genus,
                     taxonomy.family,
@@ -875,7 +951,6 @@ pub fn write_asv_mappings(
     Ok(())
 }
 
-
 /// Load FASTA sequences using needletail
 pub fn load_fasta_with_needletail(path: &Path) -> std::io::Result<Vec<(String, Vec<u8>)>> {
     let mut reader = needletail::parse_fastx_file(path)
@@ -895,7 +970,8 @@ pub fn load_fasta_with_needletail(path: &Path) -> std::io::Result<Vec<(String, V
 
 /// Extract total depth from a FASTA header token (supports both "42" and "42-15-27" formats).
 fn parse_depth_token(token: &str) -> usize {
-    let depth: usize = token.split('-')
+    let depth: usize = token
+        .split('-')
         .filter_map(|s| s.parse::<usize>().ok())
         .sum();
     depth.max(1)
@@ -903,11 +979,14 @@ fn parse_depth_token(token: &str) -> usize {
 
 /// Extract depth values from FASTA headers (format: >prefix_depth_N or >prefix_depth_N-M-K).
 pub fn extract_depths_from_headers(sequences: &[(String, Vec<u8>)]) -> Vec<usize> {
-    sequences.iter().map(|(header, _)| {
-        let first_token = header.split_whitespace().next().unwrap_or(header);
-        let depth_token = first_token.split('_').last().unwrap_or("1");
-        parse_depth_token(depth_token)
-    }).collect()
+    sequences
+        .iter()
+        .map(|(header, _)| {
+            let first_token = header.split_whitespace().next().unwrap_or(header);
+            let depth_token = first_token.split('_').last().unwrap_or("1");
+            parse_depth_token(depth_token)
+        })
+        .collect()
 }
 
 pub fn extract_depth_string(sequence: &str) -> String {

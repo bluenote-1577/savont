@@ -1,12 +1,12 @@
 use crate::cli::ClusterArgs as Cli;
-use std::sync::{Arc, Mutex};
-use rayon::prelude::*;
+use crate::constants::LSH_NUM_TABLES;
 use crate::types::*;
-use crate::constants::{LSH_NUM_TABLES};
 use fxhash::FxHashMap;
+use rayon::prelude::*;
 use std::collections::HashMap;
 use std::io::Write;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
 /// Polymorphic marker type for clustering
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -62,10 +62,7 @@ fn query_read_against_index(
         similarities.push((candidate_id, similarity));
     }
 
-    similarities.sort_by(|a, b| {
-        b.1.partial_cmp(&a.1).unwrap()
-            .then_with(|| a.0.cmp(&b.0))
-    });
+    similarities.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap().then_with(|| a.0.cmp(&b.0)));
     similarities
 }
 
@@ -83,7 +80,7 @@ pub fn cluster_reads_by_kmers(
     let threshold = args.primary_clustering_threshold;
 
     // MinHash LSH parameters
-    let use_bucketed = true;  // Flag to enable/disable bucketed approach
+    let use_bucketed = true; // Flag to enable/disable bucketed approach
     let top_n_candidates = 10; // Number of top candidates to verify
 
     // Inverted index: kmer -> Vec<read_id>
@@ -112,7 +109,7 @@ pub fn cluster_reads_by_kmers(
                 // Get top candidates sorted by number of bucket hits
                 let mut candidates: Vec<(usize, usize)> = bucket_hits.into_iter().collect();
                 candidates.par_sort_by(|a, b| (b.1, b.0).cmp(&(a.1, a.0))); // Sort by hits descending
-                //println!("Top candidates for read {}: {:?}", read_id, &candidates[..candidates.len().min(5)]);
+                                                                            //println!("Top candidates for read {}: {:?}", read_id, &candidates[..candidates.len().min(5)]);
 
                 // Find the maximum number of hits
                 let max_hits = candidates[0].1;
@@ -131,7 +128,8 @@ pub fn cluster_reads_by_kmers(
                 let mut best_similarity = 0.0;
                 let mut best_candidate = None;
 
-                let read_kmer_set: std::collections::HashSet<_> = read_kmers.iter().cloned().collect();
+                let read_kmer_set: std::collections::HashSet<_> =
+                    read_kmers.iter().cloned().collect();
 
                 for &cand_id in &candidates_to_check {
                     let rep_kmers = twin_reads[cand_id].minimizer_kmers();
@@ -180,8 +178,7 @@ pub fn cluster_reads_by_kmers(
             // No match found - this read becomes a new representative
             if use_bucketed {
                 add_read_to_bucket_index(&mut bucket_index, read_id, &read.lsh_signatures);
-            }
-            else{
+            } else {
                 add_read_to_index(&mut index, read_id, &read_kmers);
             }
             cluster_assignment.lock().unwrap().insert(read_id, read_id); // Represents itself
@@ -208,7 +205,10 @@ pub fn cluster_reads_by_kmers(
     // Build clusters from assignments
     let mut clusters_map: HashMap<usize, Vec<usize>> = HashMap::new();
     for (read_id, rep_id) in cluster_assignment {
-        clusters_map.entry(rep_id).or_insert_with(Vec::new).push(read_id);
+        clusters_map
+            .entry(rep_id)
+            .or_insert_with(Vec::new)
+            .push(read_id);
     }
 
     let mut clusters: Vec<Vec<usize>> = clusters_map.into_values().collect();
@@ -217,8 +217,11 @@ pub fn cluster_reads_by_kmers(
     for cluster in &mut clusters {
         cluster.sort_unstable();
     }
-    clusters.sort_by(|a, b| b.len().cmp(&a.len())
-        .then_with(|| a.first().cmp(&b.first())));
+    clusters.sort_by(|a, b| {
+        b.len()
+            .cmp(&a.len())
+            .then_with(|| a.first().cmp(&b.first()))
+    });
 
     // Remove small clusters
     clusters.retain(|cluster| cluster.len() >= args.min_cluster_size);
@@ -237,8 +240,13 @@ pub fn cluster_reads_by_kmers(
             cluster_id,
             cluster.len(),
             representative,
-            cluster.iter().map(|x| x.to_string()).collect::<Vec<_>>().join(",")
-        ).unwrap();
+            cluster
+                .iter()
+                .map(|x| x.to_string())
+                .collect::<Vec<_>>()
+                .join(",")
+        )
+        .unwrap();
     }
 
     log::info!(
@@ -257,7 +265,11 @@ type BucketIndex = Vec<FxHashMap<u64, Vec<usize>>>;
 
 /// Create bucket signature from minimizers using a specific hash seed
 /// Takes the bottom `bucket_size` minimizers after hashing and combines them into a single u64
-fn _create_bucket_signature(minimizers: &[Kmer48], hash_seed: u64, bucket_size: usize) -> Option<u64> {
+fn _create_bucket_signature(
+    minimizers: &[Kmer48],
+    hash_seed: u64,
+    bucket_size: usize,
+) -> Option<u64> {
     if minimizers.len() < bucket_size {
         return None;
     }
@@ -296,7 +308,10 @@ fn add_read_to_bucket_index(
 ) {
     for (table_idx, table) in bucket_index.iter_mut().enumerate() {
         if let Some(Some(signature)) = signatures.get(table_idx) {
-            table.entry(*signature).or_insert_with(Vec::new).push(read_id);
+            table
+                .entry(*signature)
+                .or_insert_with(Vec::new)
+                .push(read_id);
         }
     }
 }
@@ -307,7 +322,6 @@ fn query_read_against_bucket_index(
     bucket_index: &BucketIndex,
     signatures: &[Option<u64>],
 ) -> FxHashMap<usize, usize> {
-
     let num_tables = bucket_index.len();
 
     // Query each table in parallel using precomputed signatures
@@ -349,7 +363,10 @@ fn add_read_snpmers_to_index(
     let mask = !(3 << (k - 1));
     for &kmer in read_snpmers {
         let splitmer = kmer.to_u64() & mask;
-        index.entry(splitmer).or_insert_with(Vec::new).push((read_id, kmer));
+        index
+            .entry(splitmer)
+            .or_insert_with(Vec::new)
+            .push((read_id, kmer));
     }
 }
 
@@ -424,47 +441,50 @@ fn find_best_representative_iterative(
     let mask = !(3 << (k - 1));
 
     // find_first preserves representative order while retaining parallel search.
-    representatives.par_iter().with_max_len(1).find_first(|&&rep_id| {
-        let rep_snpmers = twin_reads[rep_id].snpmer_kmers();
+    representatives
+        .par_iter()
+        .with_max_len(1)
+        .find_first(|&&rep_id| {
+            let rep_snpmers = twin_reads[rep_id].snpmer_kmers();
 
-        // Check SNPmer compatibility
-        let mut matches = 0;
-        let mut mismatches = 0;
+            // Check SNPmer compatibility
+            let mut matches = 0;
+            let mut mismatches = 0;
 
-        for &rep_kmer in rep_snpmers.iter() {
-            let rep_splitmer = rep_kmer.to_u64() & mask;
-            if let Some(&query_kmer) = splitmer_to_kmer.get(&rep_splitmer) {
-                if query_kmer == rep_kmer {
-                    matches += 1;
-                } else {
-                    mismatches += 1;
+            for &rep_kmer in rep_snpmers.iter() {
+                let rep_splitmer = rep_kmer.to_u64() & mask;
+                if let Some(&query_kmer) = splitmer_to_kmer.get(&rep_splitmer) {
+                    if query_kmer == rep_kmer {
+                        matches += 1;
+                    } else {
+                        mismatches += 1;
+                    }
                 }
             }
-        }
 
-        // Compatible if no mismatches and at least one match
-        if mismatches == 0 && matches > 0{
-            // Additional blockmer validation if enabled and representative found
-            if args.use_blockmers {
-                let blockmer_comp = compare_blockmers(
-                    &twin_reads[read_id],
-                    &twin_reads[rep_id],
-                    k,
-                    args.blockmer_length,
-                );
-                if blockmer_comp.1 > args.blockmer_length {
-                    false
+            // Compatible if no mismatches and at least one match
+            if mismatches == 0 && matches > 0 {
+                // Additional blockmer validation if enabled and representative found
+                if args.use_blockmers {
+                    let blockmer_comp = compare_blockmers(
+                        &twin_reads[read_id],
+                        &twin_reads[rep_id],
+                        k,
+                        args.blockmer_length,
+                    );
+                    if blockmer_comp.1 > args.blockmer_length {
+                        false
+                    } else {
+                        true
+                    }
                 } else {
                     true
                 }
             } else {
-                true
+                false
             }
-        }
-        else{
-            false
-        }
-    }).copied()
+        })
+        .copied()
 }
 
 /// Find best representative using index-based search with blockmer validation
@@ -545,11 +565,7 @@ fn validate_candidates_with_blockmers(
     }
 
     // Sort by fewest mismatches, then most matches
-    blockmer_cands.sort_by(|a, b| {
-        a.2.cmp(&b.2)
-            .then(b.1.cmp(&a.1))
-            .then(a.0.cmp(&b.0))
-    });
+    blockmer_cands.sort_by(|a, b| a.2.cmp(&b.2).then(b.1.cmp(&a.1)).then(a.0.cmp(&b.0)));
 
     // Check if best candidate passes blockmer validation
     if blockmer_cands[0].2 > 1 {
@@ -576,14 +592,19 @@ pub fn cluster_reads_by_snpmers(
     // real biological variation. Skip SNPmer-based sub-clustering and pass k-mer clusters
     // through directly so SNPmer-less reads are not discarded.
     if args.low_polymorphism {
-        log::info!("Low-polymorphism mode: skipping SNPmer clustering, passing k-mer clusters through.");
+        log::info!(
+            "Low-polymorphism mode: skipping SNPmer clustering, passing k-mer clusters through."
+        );
         let mut clusters: Vec<Vec<usize>> = kmer_clusters
             .iter()
             .filter(|c| c.len() >= args.min_cluster_size)
             .cloned()
             .collect();
-        clusters.sort_by(|a, b| b.len().cmp(&a.len())
-            .then_with(|| a.first().cmp(&b.first())));
+        clusters.sort_by(|a, b| {
+            b.len()
+                .cmp(&a.len())
+                .then_with(|| a.first().cmp(&b.first()))
+        });
         return clusters;
     }
 
@@ -732,7 +753,11 @@ pub fn cluster_reads_by_snpmers(
     // Write SNPmer clusters to TSV file
     let cluster_file = output_dir.join("snpmer_clusters_before_reclust2.5.tsv");
     let mut writer = std::io::BufWriter::new(std::fs::File::create(&cluster_file).unwrap());
-    writeln!(writer, "kmer_cluster_id\tsnpmer_cluster_id\tsize\trepresentative\tmembers").unwrap();
+    writeln!(
+        writer,
+        "kmer_cluster_id\tsnpmer_cluster_id\tsize\trepresentative\tmembers"
+    )
+    .unwrap();
 
     let mut kmer_cluster_ids: Vec<usize> = local_clusters_map.keys().copied().collect();
     kmer_cluster_ids.sort_unstable();
@@ -750,8 +775,13 @@ pub fn cluster_reads_by_snpmers(
                 local_snpmer_id,
                 snpmer_cluster.len(),
                 representative,
-                snpmer_cluster.iter().map(|x| x.to_string()).collect::<Vec<_>>().join(",")
-            ).unwrap();
+                snpmer_cluster
+                    .iter()
+                    .map(|x| x.to_string())
+                    .collect::<Vec<_>>()
+                    .join(",")
+            )
+            .unwrap();
         }
     }
 
@@ -760,11 +790,7 @@ pub fn cluster_reads_by_snpmers(
     let recluster = true;
     let local_clusters_all: Vec<Vec<usize>>;
     if recluster {
-        local_clusters_all = recluster_using_consensus_reps(
-            local_clusters_map,
-            twin_reads,
-            args,
-        );
+        local_clusters_all = recluster_using_consensus_reps(local_clusters_map, twin_reads, args);
     } else {
         // Flatten all local clusters into a single list
         let mut all_clusters: Vec<Vec<usize>> = Vec::new();
@@ -798,8 +824,17 @@ pub fn cluster_reads_by_snpmers(
             snpmer_rep_id,
             cluster.len(),
             representative,
-            cluster.iter().map(|x| format!("{} {}", &twin_reads[*x].id, &twin_reads[*x].est_id.unwrap_or(100.))).collect::<Vec<_>>().join("\n")
-        ).unwrap();
+            cluster
+                .iter()
+                .map(|x| format!(
+                    "{} {}",
+                    &twin_reads[*x].id,
+                    &twin_reads[*x].est_id.unwrap_or(100.)
+                ))
+                .collect::<Vec<_>>()
+                .join("\n")
+        )
+        .unwrap();
     }
 
     return local_clusters_all;
@@ -809,7 +844,7 @@ fn compare_blockmers(
     twin_read1: &TwinRead,
     twin_read2: &TwinRead,
     _k: usize,
-    l: usize
+    l: usize,
 ) -> (usize, usize) {
     let blockmers1 = twin_read1.blockmers_vec();
     let blockmers2 = twin_read2.blockmers_vec();
@@ -837,7 +872,6 @@ fn compare_blockmers(
     (matches, mismatches)
 }
 
-
 /// Build consensus SNPmer representative for a cluster
 fn build_consensus_snpmers(
     cluster: &[usize],
@@ -857,7 +891,8 @@ fn build_consensus_snpmers_top_n(
     let mask = !(3 << (k - 1));
 
     // Map: splitmer -> Map: full_kmer -> (count, Vec<positions>)
-    let mut splitmer_data: FxHashMap<u64, FxHashMap<Kmer48, (usize, Vec<u32>)>> = FxHashMap::default();
+    let mut splitmer_data: FxHashMap<u64, FxHashMap<Kmer48, (usize, Vec<u32>)>> =
+        FxHashMap::default();
 
     // Determine how many reads to use for consensus building
     let reads_to_use = if let Some(n) = top_n {
@@ -886,10 +921,11 @@ fn build_consensus_snpmers_top_n(
     for (splitmer, kmer_data) in splitmer_data {
         // Find the k-mer with maximum count
         if let Some((&best_kmer, (count, positions))) = kmer_data.iter().max_by(|a, b| {
-            a.1.0.cmp(&b.1.0)
+            a.1 .0
+                .cmp(&b.1 .0)
                 .then_with(|| b.0.to_u64().cmp(&a.0.to_u64()))
         }) {
-            if *count >= (cluster.len()/6).max(1) {
+            if *count >= (cluster.len() / 6).max(1) {
                 // Calculate median position
                 let mut pos_sorted = positions.clone();
                 pos_sorted.sort();
@@ -898,7 +934,12 @@ fn build_consensus_snpmers_top_n(
                 } else {
                     0
                 };
-                consensus_snpmers.push(ConsensusSnpmer::new(median_pos, splitmer, best_kmer, *count as u32));
+                consensus_snpmers.push(ConsensusSnpmer::new(
+                    median_pos,
+                    splitmer,
+                    best_kmer,
+                    *count as u32,
+                ));
             }
         }
     }
@@ -927,7 +968,8 @@ fn build_consensus_blockmers_top_n(
     // full k-mer is the entire (k+l)-mer
 
     // Map: splitmer (anchor) -> Map: full_kmer -> (count, Vec<positions>)
-    let mut splitmer_data: FxHashMap<u64, FxHashMap<Kmer48, (usize, Vec<u32>)>> = FxHashMap::default();
+    let mut splitmer_data: FxHashMap<u64, FxHashMap<Kmer48, (usize, Vec<u32>)>> =
+        FxHashMap::default();
 
     // Determine how many reads to use for consensus building
     let reads_to_use = if let Some(n) = top_n {
@@ -959,10 +1001,11 @@ fn build_consensus_blockmers_top_n(
     for (splitmer, kmer_data) in splitmer_data {
         // Find the blockmer with maximum count
         if let Some((&best_kmer, (count, positions))) = kmer_data.iter().max_by(|a, b| {
-            a.1.0.cmp(&b.1.0)
+            a.1 .0
+                .cmp(&b.1 .0)
                 .then_with(|| b.0.to_u64().cmp(&a.0.to_u64()))
         }) {
-            if *count >= (cluster.len()/6).max(1) {
+            if *count >= (cluster.len() / 6).max(1) {
                 // Calculate median position
                 let mut pos_sorted = positions.clone();
                 pos_sorted.sort();
@@ -971,7 +1014,12 @@ fn build_consensus_blockmers_top_n(
                 } else {
                     0
                 };
-                consensus_blockmers.push(ConsensusPoly::new(median_pos, splitmer, best_kmer, *count as u32));
+                consensus_blockmers.push(ConsensusPoly::new(
+                    median_pos,
+                    splitmer,
+                    best_kmer,
+                    *count as u32,
+                ));
             }
         }
     }
@@ -1032,11 +1080,9 @@ fn reassign_reads_to_best_cluster(
     // Build consensus for each cluster based on marker type
     let cluster_consensus: Vec<Vec<ConsensusPoly>> = current_clusters
         .iter()
-        .map(|cluster| {
-            match marker_type {
-                PolyMarkerType::Snpmer => build_consensus_snpmers(cluster, twin_reads, k),
-                PolyMarkerType::Blockmer => build_consensus_blockmers(cluster, twin_reads, k, l),
-            }
+        .map(|cluster| match marker_type {
+            PolyMarkerType::Snpmer => build_consensus_snpmers(cluster, twin_reads, k),
+            PolyMarkerType::Blockmer => build_consensus_blockmers(cluster, twin_reads, k, l),
         })
         .collect();
 
@@ -1141,7 +1187,10 @@ fn reassign_reads_to_best_cluster(
     }
     let num_reassignments = num_reassignments.into_inner().unwrap();
 
-    log::trace!("Reassignment complete: {} reads reassigned to better clusters", num_reassignments);
+    log::trace!(
+        "Reassignment complete: {} reads reassigned to better clusters",
+        num_reassignments
+    );
 
     (new_clusters, num_reassignments)
 }
@@ -1178,14 +1227,19 @@ fn recluster_one_round_top_n(
 
         let consensus = match marker_type {
             PolyMarkerType::Snpmer => build_consensus_snpmers_top_n(&cluster, twin_reads, k, top_n),
-            PolyMarkerType::Blockmer => build_consensus_blockmers_top_n(&cluster, twin_reads, k, l, top_n),
+            PolyMarkerType::Blockmer => {
+                build_consensus_blockmers_top_n(&cluster, twin_reads, k, l, top_n)
+            }
         };
         all_clusters.push((cluster, consensus));
     }
 
     // Sort clusters by size (descending) so we merge smaller into larger
-    all_clusters.sort_by(|a, b| b.0.len().cmp(&a.0.len())
-        .then_with(|| a.0.first().cmp(&b.0.first())));
+    all_clusters.sort_by(|a, b| {
+        b.0.len()
+            .cmp(&a.0.len())
+            .then_with(|| a.0.first().cmp(&b.0.first()))
+    });
 
     // Merge clusters with concordant consensus representatives
     let mut cluster_merged: Vec<bool> = vec![false; all_clusters.len()];
@@ -1201,8 +1255,12 @@ fn recluster_one_round_top_n(
         // If this cluster was merged into in a previous iteration, rebuild its consensus
         if cluster_needs_consensus_rebuild[i] {
             all_clusters[i].1 = match marker_type {
-                PolyMarkerType::Snpmer => build_consensus_snpmers_top_n(&all_clusters[i].0, twin_reads, k, top_n),
-                PolyMarkerType::Blockmer => build_consensus_blockmers_top_n(&all_clusters[i].0, twin_reads, k, l, top_n),
+                PolyMarkerType::Snpmer => {
+                    build_consensus_snpmers_top_n(&all_clusters[i].0, twin_reads, k, top_n)
+                }
+                PolyMarkerType::Blockmer => {
+                    build_consensus_blockmers_top_n(&all_clusters[i].0, twin_reads, k, l, top_n)
+                }
             };
             cluster_needs_consensus_rebuild[i] = false;
         }
@@ -1218,25 +1276,26 @@ fn recluster_one_round_top_n(
             let consensus_i = &all_clusters[i].1;
             let consensus_j = &all_clusters[j].1;
             let mut concordant = {
-                are_consensus_concordant(consensus_i, consensus_j) &&
-                are_consensus_concordant(consensus_j, consensus_i)
+                are_consensus_concordant(consensus_i, consensus_j)
+                    && are_consensus_concordant(consensus_j, consensus_i)
             };
 
             let (matches, mismatches) = compare_consensus_snpmers(consensus_i, consensus_j);
             let max_len = all_clusters[i].0.len().max(all_clusters[j].0.len());
             let min_len = all_clusters[i].0.len().min(all_clusters[j].0.len());
             let _missing = consensus_i.len().min(consensus_j.len()) - matches;
-            if mismatches == 0  && 
-            (matches as f64) > (consensus_i.len().min(consensus_j.len()) as f64) * 0.975 && 
-            max_len / min_len > 50 {
+            if mismatches == 0
+                && (matches as f64) > (consensus_i.len().min(consensus_j.len()) as f64) * 0.975
+                && max_len / min_len > 50
+            {
                 concordant = true;
-                //println!("Note: Clusters {} and {} potential merging due to size disparity vs mismatches: max_len {}, min_len {}, matches {}, mismatches {}, cons len 1 {}, cons len 2 {}", 
+                //println!("Note: Clusters {} and {} potential merging due to size disparity vs mismatches: max_len {}, min_len {}, matches {}, mismatches {}, cons len 1 {}, cons len 2 {}",
                 //i, j, max_len, min_len, matches, mismatches, consensus_i.len(), consensus_j.len());
             }
-            
+
             if mismatches == 0 && max_len / min_len > 500 && min_len <= 2 {
                 concordant = true;
-                //println!("Note: Clusters {} and {} potential merging due to extreme size disparity vs mismatches: max_len {}, min_len {}, matches {}, mismatches {}, cons len 1 {}, cons len 2 {}", 
+                //println!("Note: Clusters {} and {} potential merging due to extreme size disparity vs mismatches: max_len {}, min_len {}, matches {}, mismatches {}, cons len 1 {}, cons len 2 {}",
                 //i, j, max_len, min_len, matches, mismatches, consensus_i.len(), consensus_j.len());
             }
 
@@ -1258,21 +1317,26 @@ fn recluster_one_round_top_n(
                 num_merges += 1;
                 log::trace!(
                     "Merged cluster {} (size {}) into cluster {} (old size: {}, new size: {})",
-                    j, cluster_j_size, i, old_size, all_clusters[i].0.len()
+                    j,
+                    cluster_j_size,
+                    i,
+                    old_size,
+                    all_clusters[i].0.len()
                 );
             } else {
-                log::trace!(
-                    "Clusters {} and {} not concordant, not merging",
-                    i, j
-                );
+                log::trace!("Clusters {} and {} not concordant, not merging", i, j);
             }
         }
 
         // Rebuild consensus one final time if any merges happened for cluster i
         if cluster_needs_consensus_rebuild[i] {
             all_clusters[i].1 = match marker_type {
-                PolyMarkerType::Snpmer => build_consensus_snpmers_top_n(&all_clusters[i].0, twin_reads, k, top_n),
-                PolyMarkerType::Blockmer => build_consensus_blockmers_top_n(&all_clusters[i].0, twin_reads, k, l, top_n),
+                PolyMarkerType::Snpmer => {
+                    build_consensus_snpmers_top_n(&all_clusters[i].0, twin_reads, k, top_n)
+                }
+                PolyMarkerType::Blockmer => {
+                    build_consensus_blockmers_top_n(&all_clusters[i].0, twin_reads, k, l, top_n)
+                }
             };
         }
 
@@ -1281,8 +1345,11 @@ fn recluster_one_round_top_n(
     }
 
     // Sort by size descending
-    merged_clusters.sort_by(|a, b| b.len().cmp(&a.len())
-        .then_with(|| a.first().cmp(&b.first())));
+    merged_clusters.sort_by(|a, b| {
+        b.len()
+            .cmp(&a.len())
+            .then_with(|| a.first().cmp(&b.first()))
+    });
 
     (merged_clusters, num_merges)
 }
@@ -1291,7 +1358,7 @@ pub fn recluster_using_consensus_reps(
     clusters: FxHashMap<usize, Vec<Vec<usize>>>,
     twin_reads: &[TwinRead],
     args: &Cli,
-) -> Vec<Vec<usize>>{
+) -> Vec<Vec<usize>> {
     log::info!("Starting iterative reclustering using consensus representatives...");
 
     let k = args.kmer_size;
@@ -1306,66 +1373,84 @@ pub fn recluster_using_consensus_reps(
 
     let total_groups = current_clusters.len();
     let total_initial_clusters: usize = current_clusters.values().map(|v| v.len()).sum();
-    log::info!("Starting with {} k-mer groups containing {} total SNPmer clusters", total_groups, total_initial_clusters);
+    log::info!(
+        "Starting with {} k-mer groups containing {} total SNPmer clusters",
+        total_groups,
+        total_initial_clusters
+    );
 
     // Step 2: Iteratively recluster until convergence
     let mut iteration = 0;
     loop {
         if iteration >= args.max_iterations_recluster {
-            log::info!("Reached maximum reclustering iterations ({})", args.max_iterations_recluster);
+            log::info!(
+                "Reached maximum reclustering iterations ({})",
+                args.max_iterations_recluster
+            );
             break;
         }
         iteration += 1;
         let total_merges = Mutex::new(0);
         let total_reassignments = Mutex::new(0);
 
-        let new_clusters: Mutex<FxHashMap<usize, Vec<Vec<usize>>>> = Mutex::new(FxHashMap::default());
-
+        let new_clusters: Mutex<FxHashMap<usize, Vec<Vec<usize>>>> =
+            Mutex::new(FxHashMap::default());
 
         // Process each k-mer group independently
         //for (kmer_cluster_id, snpmer_clusters) in current_clusters {
-        current_clusters.into_par_iter().for_each(|(kmer_cluster_id, snpmer_clusters)| {
-            log::trace!("Processing k-mer group {} with {} SNPmer clusters", kmer_cluster_id, snpmer_clusters.len());
+        current_clusters
+            .into_par_iter()
+            .for_each(|(kmer_cluster_id, snpmer_clusters)| {
+                log::trace!(
+                    "Processing k-mer group {} with {} SNPmer clusters",
+                    kmer_cluster_id,
+                    snpmer_clusters.len()
+                );
 
-            // Step 2a: Merge clusters within this group
-            let (merged_clusters, num_merges) = recluster_one_round(
-                snpmer_clusters,
-                twin_reads,
-                k,
-                args.blockmer_length,
-                marker_type, // TODO: Make this configurable
-            );
-
-            *total_merges.lock().unwrap() += num_merges;
-            log::trace!("Processing k-mer group {} --- merged", kmer_cluster_id);
-
-            // Step 2b: Reassign reads to best matching clusters within this group
-            let reassign = true;
-            if reassign{
-                let (reassigned_clusters, num_reassignments) = reassign_reads_to_best_cluster(
-                    merged_clusters,
+                // Step 2a: Merge clusters within this group
+                let (merged_clusters, num_merges) = recluster_one_round(
+                    snpmer_clusters,
                     twin_reads,
                     k,
                     args.blockmer_length,
                     marker_type, // TODO: Make this configurable
-                    args,
                 );
 
-                *total_reassignments.lock().unwrap() += num_reassignments;
+                *total_merges.lock().unwrap() += num_merges;
+                log::trace!("Processing k-mer group {} --- merged", kmer_cluster_id);
 
-                // Store the updated clusters for this k-mer group
-                if !reassigned_clusters.is_empty() {
-                    new_clusters.lock().unwrap().insert(kmer_cluster_id, reassigned_clusters);
+                // Step 2b: Reassign reads to best matching clusters within this group
+                let reassign = true;
+                if reassign {
+                    let (reassigned_clusters, num_reassignments) = reassign_reads_to_best_cluster(
+                        merged_clusters,
+                        twin_reads,
+                        k,
+                        args.blockmer_length,
+                        marker_type, // TODO: Make this configurable
+                        args,
+                    );
+
+                    *total_reassignments.lock().unwrap() += num_reassignments;
+
+                    // Store the updated clusters for this k-mer group
+                    if !reassigned_clusters.is_empty() {
+                        new_clusters
+                            .lock()
+                            .unwrap()
+                            .insert(kmer_cluster_id, reassigned_clusters);
+                    }
+                } else {
+                    // Store the merged clusters without reassignment
+                    if !merged_clusters.is_empty() {
+                        new_clusters
+                            .lock()
+                            .unwrap()
+                            .insert(kmer_cluster_id, merged_clusters);
+                    }
                 }
-            }
-            else{
-                // Store the merged clusters without reassignment
-                if !merged_clusters.is_empty() {
-                    new_clusters.lock().unwrap().insert(kmer_cluster_id, merged_clusters);
-                }
-            }
-            log::trace!("Processing k-mer group {} --- done", kmer_cluster_id);
-        });
+                log::trace!("Processing k-mer group {} --- done", kmer_cluster_id);
+            });
 
         let new_clusters = new_clusters.into_inner().unwrap();
         let total_merges = total_merges.into_inner().unwrap();
@@ -1402,11 +1487,18 @@ pub fn recluster_using_consensus_reps(
     }
 
     // Sort by size descending
-    final_clusters.sort_by(|a, b| b.len().cmp(&a.len())
-        .then_with(|| a.first().cmp(&b.first())));
+    final_clusters.sort_by(|a, b| {
+        b.len()
+            .cmp(&a.len())
+            .then_with(|| a.first().cmp(&b.first()))
+    });
     final_clusters.retain(|cluster| cluster.len() >= args.min_cluster_size);
 
-    log::info!("Final result: {} total clusters across {} k-mer groups", final_clusters.len(), current_clusters.len());
+    log::info!(
+        "Final result: {} total clusters across {} k-mer groups",
+        final_clusters.len(),
+        current_clusters.len()
+    );
 
     // Step 4: Debugging - Compare all final clusters and output mismatch statistics
     if log::log_enabled!(log::Level::Trace) {
@@ -1427,10 +1519,8 @@ pub fn recluster_using_consensus_reps(
                 let rep_j = final_clusters[j][0];
 
                 // Count matches and mismatches
-                let (matches, mismatches) = compare_consensus_snpmers(
-                    &final_consensus[i],
-                    &final_consensus[j]
-                );
+                let (matches, mismatches) =
+                    compare_consensus_snpmers(&final_consensus[i], &final_consensus[j]);
 
                 if matches > 0 || mismatches > 0 {
                     log::debug!(

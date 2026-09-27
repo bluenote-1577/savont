@@ -2,6 +2,11 @@
 
 All notable changes to savont will be documented in this file.
 
+## [0.7.1] - 2026-9-27
+
+- Ran a `rustfmt` - will look like huge code changes occurred. 
+- Fixed a bug where empty consensus ASVs could cause savont to crash. 
+
 ## [0.7.0] - 2026-8-30
 
 - Added `final_assignments.tsv` to the output directory: a clean read-to-ASV assignment table with columns `read_id`, `asv`, `alignment_identity`, and `est_read_identity` (Phred-estimated per-base read accuracy). Covers all reads that passed length/quality filters; reads with no valid EM alignment are marked `unassigned`.

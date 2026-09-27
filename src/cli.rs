@@ -1,5 +1,5 @@
-use clap::{Parser, Subcommand, ValueEnum};
 use crate::constants::CLI_HEADINGS;
+use clap::{Parser, Subcommand, ValueEnum};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -7,8 +7,7 @@ use crate::constants::CLI_HEADINGS;
     about = "savont - high-resolution ASV (Amplicon Sequence Variant) generation and taxonomic profiling for ONT R10.4/HiFi long-read amplicon sequencing",
     version,
     author,
-    disable_help_subcommand = true,
-
+    disable_help_subcommand = true
 )]
 pub struct Cli {
     #[command(subcommand)]
@@ -74,16 +73,14 @@ pub struct ClusterArgs {
 
     /// Per-sample quantification: treat each input file as a distinct sample.
     /// Reads are pooled for ASV calling; depths are quantified per file.
-    #[arg(long, default_value_t=false, help_heading = "Multi-sample pooling")]
+    #[arg(long, default_value_t = false, help_heading = "Multi-sample pooling")]
     pub pooled_samples: bool,
-
-
 
     /// K-mer sampling rate: select 1 out of every C k-mers (higher = faster, less memory, slightly less sensitive)
     #[arg(short, long, default_value = "11", help_heading = CLI_HEADINGS[0], hide = true)]
     pub c: usize,
 
-    /// Minimum read length for reads 
+    /// Minimum read length for reads
     #[arg(short = 'm', long, default_value = "1100", help_heading = CLI_HEADINGS[0])]
     pub min_read_length: usize,
 
@@ -95,7 +92,7 @@ pub struct ClusterArgs {
     #[arg(long, default_value_t=98., help_heading = CLI_HEADINGS[0])]
     pub quality_value_cutoff: f64,
 
-    /// Minimum base quality to be considered high-quality for SNPmer detection. Set lower for older reads. 
+    /// Minimum base quality to be considered high-quality for SNPmer detection. Set lower for older reads.
     #[arg(long, default_value_t=25, help_heading = CLI_HEADINGS[0])]
     pub minimum_base_quality: u8,
 
@@ -106,7 +103,7 @@ pub struct ClusterArgs {
     /// Minimum number of reads required to keep a cluster (ASV)
     #[arg(long, default_value_t=12, help_heading = CLI_HEADINGS[1])]
     pub min_cluster_size: usize,
-    
+
     /// Bloom filter size in GB for k-mer filtering (0 = auto, increase for very large datasets)
     #[arg(short, long, default_value_t=0., help_heading = CLI_HEADINGS[1], hide=true)]
     pub bloom_filter_size: f64,
@@ -115,19 +112,18 @@ pub struct ClusterArgs {
     #[arg(short, long, default_value_t=250, help_heading = CLI_HEADINGS[2])]
     pub n_depth_cutoff: usize,
 
-    /// Use homopolymer compression for clustering and consensus generation. Helps for complex, eukaryotic genomes. 
+    /// Use homopolymer compression for clustering and consensus generation. Helps for complex, eukaryotic genomes.
     #[arg(short, long, default_value_t=false, help_heading = CLI_HEADINGS[2])]
     pub use_hpc: bool,
-
 
     /// Mask low-quality bases in consensus sequences (set to 'N' if below posterior probability threshold)
     #[arg(long, help_heading = CLI_HEADINGS[2])]
     pub mask_low_quality: bool,
 
-    /// Negative alternate posterior probability threshold (natural log scale) for base consensus. Higher = more stringent for low-quality consensuses. Do not set higher than min_depth * ln(error_rate). 
+    /// Negative alternate posterior probability threshold (natural log scale) for base consensus. Higher = more stringent for low-quality consensuses. Do not set higher than min_depth * ln(error_rate).
     #[arg(short, long, default_value_t=30., help_heading = CLI_HEADINGS[2])]
     pub posterior_threshold_ln: f64,
-    
+
     /// Maximum number of reclustering iterations
     #[arg(long, default_value_t=10, help_heading = CLI_HEADINGS[1], hide = true)]
     pub max_iterations_recluster: usize,
@@ -137,7 +133,7 @@ pub struct ClusterArgs {
     pub aggressive_bloom: bool,
 
     /// Skip chimera detection step (not recommended)
-    #[arg(long, hide=true)]
+    #[arg(long, hide = true)]
     pub skip_chimera_detection: bool,
 
     /// Disable SNPmer clustering (not recommended, uses only k-mers)
@@ -149,7 +145,7 @@ pub struct ClusterArgs {
     #[arg(long, default_value_t=false, help_heading = CLI_HEADINGS[2])]
     pub low_polymorphism: bool,
 
-        /// K-mer size for clustering (must be odd and < 24)
+    /// K-mer size for clustering (must be odd and < 24)
     #[arg(short, long, default_value = "17", help_heading = CLI_HEADINGS[1], hide = true)]
     pub kmer_size: usize,
 
@@ -168,7 +164,6 @@ pub struct ClusterArgs {
     /// Length of near-perfect asv segment matches to consider for chimera detection (higher = less sensitive). Default is 1/10 of the minimum read length.
     #[arg(long, help_heading = CLI_HEADINGS[3])]
     pub chimera_detect_length: Option<usize>,
-
 
     /// Print help in markdown format
     #[arg(long, hide = true)]
@@ -303,7 +298,6 @@ impl Default for LogLevel {
         LogLevel::Debug
     }
 }
-
 
 impl Cli {
     pub fn log_level_filter(&self) -> log::LevelFilter {

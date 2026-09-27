@@ -1,16 +1,16 @@
-use crate::{seeding, types::*, utils};
-use crate::constants::*;
-use std::io::Write;
-use std::sync::{Arc, Mutex};
+use crate::asv_cluster::find_compatible_candidates;
 use crate::cli::ClusterArgs as Cli;
-use std::path::{Path, PathBuf};
+use crate::constants::*;
+use crate::kmer_comp;
+use crate::{seeding, types::*, utils};
+use bio_seq::prelude::*;
+use fxhash::{FxHashMap, FxHashSet};
 use minimap2::Aligner;
 use rayon::prelude::*;
-use bio_seq::prelude::*;
 use std::collections::HashMap;
-use fxhash::{FxHashMap, FxHashSet};
-use crate::asv_cluster::find_compatible_candidates;
-use crate::kmer_comp;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 /// Represents a base in the pileup at a reference position
 #[derive(Debug, Clone)]
@@ -28,9 +28,9 @@ pub enum PileupBase {
 /// Pileup information at a single reference position
 #[derive(Debug, Clone)]
 pub struct Pileup {
-    pub ref_pos: usize,        // Position in HPC consensus
-    pub ref_base: u8,          // HPC base
-    pub ref_hp_length: u8,     // Modal HP length from aligned reads
+    pub ref_pos: usize,    // Position in HPC consensus
+    pub ref_base: u8,      // HPC base
+    pub ref_hp_length: u8, // Modal HP length from aligned reads
     pub bases: Vec<PileupBase>,
     pub alt_posterior: Option<f64>,
 }
@@ -63,9 +63,21 @@ impl Pileup {
     }
 
     pub fn depth_nodeletion(&self) -> (usize, usize, usize) {
-        let with_bases = self.bases.iter().filter(|b| !matches!(b, PileupBase::Deletion)).count();
-        let with_insertions = self.bases.iter().filter(|b| matches!(b, PileupBase::Insertion(_))).count();
-        let with_deletions = self.bases.iter().filter(|b| matches!(b, PileupBase::Deletion)).count();
+        let with_bases = self
+            .bases
+            .iter()
+            .filter(|b| !matches!(b, PileupBase::Deletion))
+            .count();
+        let with_insertions = self
+            .bases
+            .iter()
+            .filter(|b| matches!(b, PileupBase::Insertion(_)))
+            .count();
+        let with_deletions = self
+            .bases
+            .iter()
+            .filter(|b| matches!(b, PileupBase::Deletion))
+            .count();
         (with_bases, with_insertions, with_deletions)
     }
 }
@@ -97,7 +109,7 @@ fn has_homopolymer_context(seq: &[u8], pos: usize, window: usize) -> bool {
 /// Calculate adjusted error count from CIGAR alignment
 /// Counts mismatches and indels, but only counts indels if they're NOT
 /// surrounded by homopolymer runs of length > 2
-/// Use gap-collapsed NM 
+/// Use gap-collapsed NM
 fn calculate_adjusted_errors(
     cigar: &[(u32, u8)],
     query_seq: &[u8],
@@ -118,7 +130,9 @@ fn calculate_adjusted_errors(
                 // For matches, count actual mismatches
                 for _ in 0..len {
                     if query_pos < query_seq.len() && target_pos < target_seq.len() {
-                        if query_seq[query_pos] != target_seq[target_pos]  && (query_seq[query_pos] != b'N' && target_seq[target_pos] != b'N') {
+                        if query_seq[query_pos] != target_seq[target_pos]
+                            && (query_seq[query_pos] != b'N' && target_seq[target_pos] != b'N')
+                        {
                             if query_pos > buffer && query_pos + buffer < query_seq.len() {
                                 error_count += 1;
                             }
@@ -142,10 +156,9 @@ fn calculate_adjusted_errors(
 
                 if !in_homopolymer {
                     if query_pos > buffer && query_pos + len + buffer < query_seq.len() {
-                        if len < 10{
+                        if len < 10 {
                             error_count += 1;
-                        }
-                        else{
+                        } else {
                             error_count += len;
                         }
                     }
@@ -160,10 +173,9 @@ fn calculate_adjusted_errors(
 
                 if !in_homopolymer {
                     if target_pos > buffer && target_pos + len + buffer < target_seq.len() {
-                        if len < 10{
+                        if len < 10 {
                             error_count += 1;
-                        }
-                        else{
+                        } else {
                             error_count += len;
                         }
                     }
@@ -209,7 +221,8 @@ fn generate_consensus_poa(
     // Band = 0.1 * seq_len + |ref_len - seq_len|.  Use mean length as ref_len and the
     // cluster's max deviation as the fixed base so one engine covers all sequences.
     let ref_len = sequences.iter().map(|s| s.len()).sum::<usize>() / sequences.len();
-    let max_deviation = sequences.iter()
+    let max_deviation = sequences
+        .iter()
         .map(|s| (ref_len as isize - s.len() as isize).abs() as u32)
         .max()
         .unwrap_or(0);
@@ -217,20 +230,34 @@ fn generate_consensus_poa(
     let mut engine = if no_band {
         SimdEngine::new(AlignmentType::Overlap, scoring)
     } else {
-        SimdEngine::banded(AlignmentType::Overlap, scoring, BandConfig { base: max_deviation, frac: 0.1 })
+        SimdEngine::banded(
+            AlignmentType::Overlap,
+            scoring,
+            BandConfig {
+                base: max_deviation,
+                frac: 0.1,
+            },
+        )
     };
     let mut graph = Graph::new();
 
     for i in 0..sequences.len() {
         let u32_qual: Vec<u32> = qualities[i].iter().map(|&q| q as u32).collect();
         let (alignment, _score) = engine.align(&sequences[i], &graph);
-        graph.add_alignment(&alignment, &sequences[i], &u32_qual).expect("add_alignment failed");
+        graph
+            .add_alignment(&alignment, &sequences[i], &u32_qual)
+            .expect("add_alignment failed");
     }
 
     graph.generate_consensus().into_bytes()
 }
 
-pub fn align_and_consensus(twin_reads: &[TwinRead], clusters: Vec<Vec<usize>>, args: &Cli, output_dir: &PathBuf) -> Vec<ConsensusSequence> {
+pub fn align_and_consensus(
+    twin_reads: &[TwinRead],
+    clusters: Vec<Vec<usize>>,
+    args: &Cli,
+    output_dir: &PathBuf,
+) -> Vec<ConsensusSequence> {
     let max_seqs_consensus = 75;
 
     // Log which POA implementation is being used
@@ -400,13 +427,21 @@ pub fn align_and_consensus(twin_reads: &[TwinRead], clusters: Vec<Vec<usize>>, a
 
     let mut consensus_seqs = consensus_seqs.into_inner().unwrap();
     consensus_seqs.sort_by(|a, b| b.3.cmp(&a.3).then_with(|| a.0.cmp(&b.0)));
-    let consensus_seqs: Vec<ConsensusSequence> = consensus_seqs.into_iter().map(|(id, seq, hp_lens, depth, cluster)| ConsensusSequence::new(seq, hp_lens, depth, id, cluster)).collect();
+    let consensus_seqs: Vec<ConsensusSequence> = consensus_seqs
+        .into_iter()
+        .map(|(id, seq, hp_lens, depth, cluster)| {
+            ConsensusSequence::new(seq, hp_lens, depth, id, cluster)
+        })
+        .collect();
 
     // Write HPC consensus sequences to file
     let consensus_path = output_dir.join("consensus_sequences.fasta");
     write_consensus_fasta(&consensus_seqs, &consensus_path, "initial")
         .expect("Failed to write consensus_sequences.fasta");
-    log::info!("Wrote {} consensus sequences to consensus_sequences.fasta", consensus_seqs.len());
+    log::info!(
+        "Wrote {} consensus sequences to consensus_sequences.fasta",
+        consensus_seqs.len()
+    );
 
     consensus_seqs
 }
@@ -423,149 +458,166 @@ pub fn generate_consensus_pileups(
     let pileups = Mutex::new(Vec::new());
 
     // Process each consensus and its reads in parallel
-    consensuses.par_iter().enumerate().for_each(|(cluster_idx, consensus)| {
-        let cluster = &consensus.cluster;
-        let consensus_seq = &consensus.sequence;
-        let consensus_hp_lengths = &consensus.hp_lengths;
+    consensuses
+        .par_iter()
+        .enumerate()
+        .for_each(|(cluster_idx, consensus)| {
+            let cluster = &consensus.cluster;
+            let consensus_seq = &consensus.sequence;
+            let consensus_hp_lengths = &consensus.hp_lengths;
 
-        // Initialize pileup for this consensus with placeholder ref_hp_length (will be updated later)
-        let mut cluster_pileup: Vec<Pileup> = consensus_seq
-            .iter()
-            .enumerate()
-            .map(|(pos, &base)| Pileup::new(pos, base, consensus_hp_lengths[pos]))
-            .collect();
-
-        // Create aligner with this consensus as reference
-        let aligner = Aligner::builder()
-            .map_ont()
-            .with_index_threads(1) // Use 1 thread per aligner since we parallelize over consensuses
-            .with_cigar()
-            .with_seq(consensus_seq)
-            .expect("Failed to create aligner");
-
-        // Align reads from this cluster back to consensus
-        let reads_to_align = cluster.len().min(max_seqs_consensus);
-
-        for i in 0..reads_to_align {
-            let read_idx = cluster[i];
-            let twin_read = &twin_reads[read_idx];
-
-            // Get sequence and quality
-            let seq_u8: Vec<u8> = twin_read.dna_seq.iter()
-                .map(|x| x.to_char().to_ascii_uppercase() as u8)
-                .collect();
-
-            let qual_u8 = if let Some(qual_seq) = &twin_read.qual_seq {
-                qual_seq.iter().map(|x| (x as u8) * 3 + 33).collect()
-            } else {
-                vec![33; twin_read.dna_seq.len()]
-            };
-
-            // Bin qualities similar to align_and_consensus
-            let bin_size = QUALITY_SEQ_BIN;
-            let mut query_quals_u8: Vec<u8> = qual_u8
+            // Initialize pileup for this consensus with placeholder ref_hp_length (will be updated later)
+            let mut cluster_pileup: Vec<Pileup> = consensus_seq
                 .iter()
-                .flat_map(|x| vec![*x; bin_size])
+                .enumerate()
+                .map(|(pos, &base)| Pileup::new(pos, base, consensus_hp_lengths[pos]))
                 .collect();
 
-            // Adjust quality length to match sequence length
-            if query_quals_u8.len() > seq_u8.len() {
-                query_quals_u8.truncate(seq_u8.len());
-            } else if query_quals_u8.len() < seq_u8.len() {
-                let last_qual = query_quals_u8[query_quals_u8.len() - 1];
-                query_quals_u8.extend(vec![last_qual; seq_u8.len() - query_quals_u8.len()]);
-            }
+            // Create aligner with this consensus as reference
+            let aligner = Aligner::builder()
+                .map_ont()
+                .with_index_threads(1) // Use 1 thread per aligner since we parallelize over consensuses
+                .with_cigar()
+                .with_seq(consensus_seq)
+                .expect("Failed to create aligner");
 
-            // HPC compress the read before aligning to HPC consensus
-            let (hpc_seq, hpc_qual, hp_lens) = utils::homopolymer_compress_with_quality(&seq_u8, &query_quals_u8, args.use_hpc);
+            // Align reads from this cluster back to consensus
+            let reads_to_align = cluster.len().min(max_seqs_consensus);
 
-            // Align HPC read to HPC consensus
-            let alignment = aligner.map(&hpc_seq, true, false, None, None, None);
+            for i in 0..reads_to_align {
+                let read_idx = cluster[i];
+                let twin_read = &twin_reads[read_idx];
 
-            if let Ok(mappings) = alignment {
-                if let Some(best_mapping) = mappings.first() {
-                    if let Some(ref alignment_info) = best_mapping.alignment {
-                        if let Some(ref cigar) = alignment_info.cigar {
-                            // Get aligned portion of HPC sequence, quality, and HP lengths
-                            let final_seq;
-                            let final_qual;
-                            let final_hp_lens;
+                // Get sequence and quality
+                let seq_u8: Vec<u8> = twin_read
+                    .dna_seq
+                    .iter()
+                    .map(|x| x.to_char().to_ascii_uppercase() as u8)
+                    .collect();
 
-                            // Handle reverse complement if needed
-                            let reverse;
-                            if best_mapping.strand == minimap2::Strand::Reverse {
-                                reverse = true;
-                                final_seq = utils::reverse_complement(&hpc_seq);
-                                final_qual = hpc_qual.iter().rev().cloned().collect();
-                                final_hp_lens = hp_lens.iter().rev().cloned().collect();
-                            }
-                            else{
-                                final_seq = hpc_seq;
-                                final_qual = hpc_qual;
-                                final_hp_lens = hp_lens;
-                                reverse = false;
-                            }
+                let qual_u8 = if let Some(qual_seq) = &twin_read.qual_seq {
+                    qual_seq.iter().map(|x| (x as u8) * 3 + 33).collect()
+                } else {
+                    vec![33; twin_read.dna_seq.len()]
+                };
 
-                            // Extract mapped portion
-                            let query_start;
-                            let query_end;
-                            if reverse {
-                                query_start = final_seq.len() - best_mapping.query_end as usize;
-                                query_end = final_seq.len() - best_mapping.query_start as usize;
-                            } else {
-                                query_start = best_mapping.query_start as usize;
-                                query_end = best_mapping.query_end as usize;
-                            };
-                            let mapped_seq = &final_seq[query_start..query_end];
-                            let mapped_qual = &final_qual[query_start..query_end];
-                            let mapped_hp_lens = &final_hp_lens[query_start..query_end];
+                // Bin qualities similar to align_and_consensus
+                let bin_size = QUALITY_SEQ_BIN;
+                let mut query_quals_u8: Vec<u8> =
+                    qual_u8.iter().flat_map(|x| vec![*x; bin_size]).collect();
 
-                            // Process CIGAR to populate pileup
-                            let mut ref_pos = best_mapping.target_start as usize;
-                            let mut query_pos = 0;
+                // Adjust quality length to match sequence length
+                if query_quals_u8.len() > seq_u8.len() {
+                    query_quals_u8.truncate(seq_u8.len());
+                } else if query_quals_u8.len() < seq_u8.len() {
+                    let last_qual = query_quals_u8[query_quals_u8.len() - 1];
+                    query_quals_u8.extend(vec![last_qual; seq_u8.len() - query_quals_u8.len()]);
+                }
 
-                            for &(length, op) in cigar.iter() {
-                                let len = length as usize;
+                // HPC compress the read before aligning to HPC consensus
+                let (hpc_seq, hpc_qual, hp_lens) = utils::homopolymer_compress_with_quality(
+                    &seq_u8,
+                    &query_quals_u8,
+                    args.use_hpc,
+                );
 
-                                match op {
-                                    0 => {
-                                        // Match or mismatch - add bases to pileup with HP lengths
-                                        for j in 0..len {
-                                            if ref_pos + j < cluster_pileup.len() && query_pos + j < mapped_seq.len() {
-                                                let base = mapped_seq[query_pos + j];
-                                                let qual = mapped_qual[query_pos + j];
-                                                let hp_len = mapped_hp_lens[query_pos + j];
-                                                cluster_pileup[ref_pos + j].add_base(base, qual, hp_len);
+                // Align HPC read to HPC consensus
+                let alignment = aligner.map(&hpc_seq, true, false, None, None, None);
+
+                if let Ok(mappings) = alignment {
+                    if let Some(best_mapping) = mappings.first() {
+                        if let Some(ref alignment_info) = best_mapping.alignment {
+                            if let Some(ref cigar) = alignment_info.cigar {
+                                // Get aligned portion of HPC sequence, quality, and HP lengths
+                                let final_seq;
+                                let final_qual;
+                                let final_hp_lens;
+
+                                // Handle reverse complement if needed
+                                let reverse;
+                                if best_mapping.strand == minimap2::Strand::Reverse {
+                                    reverse = true;
+                                    final_seq = utils::reverse_complement(&hpc_seq);
+                                    final_qual = hpc_qual.iter().rev().cloned().collect();
+                                    final_hp_lens = hp_lens.iter().rev().cloned().collect();
+                                } else {
+                                    final_seq = hpc_seq;
+                                    final_qual = hpc_qual;
+                                    final_hp_lens = hp_lens;
+                                    reverse = false;
+                                }
+
+                                // Extract mapped portion
+                                let query_start;
+                                let query_end;
+                                if reverse {
+                                    query_start = final_seq.len() - best_mapping.query_end as usize;
+                                    query_end = final_seq.len() - best_mapping.query_start as usize;
+                                } else {
+                                    query_start = best_mapping.query_start as usize;
+                                    query_end = best_mapping.query_end as usize;
+                                };
+                                let mapped_seq = &final_seq[query_start..query_end];
+                                let mapped_qual = &final_qual[query_start..query_end];
+                                let mapped_hp_lens = &final_hp_lens[query_start..query_end];
+
+                                // Process CIGAR to populate pileup
+                                let mut ref_pos = best_mapping.target_start as usize;
+                                let mut query_pos = 0;
+
+                                for &(length, op) in cigar.iter() {
+                                    let len = length as usize;
+
+                                    match op {
+                                        0 => {
+                                            // Match or mismatch - add bases to pileup with HP lengths
+                                            for j in 0..len {
+                                                if ref_pos + j < cluster_pileup.len()
+                                                    && query_pos + j < mapped_seq.len()
+                                                {
+                                                    let base = mapped_seq[query_pos + j];
+                                                    let qual = mapped_qual[query_pos + j];
+                                                    let hp_len = mapped_hp_lens[query_pos + j];
+                                                    cluster_pileup[ref_pos + j]
+                                                        .add_base(base, qual, hp_len);
+                                                }
                                             }
+                                            ref_pos += len;
+                                            query_pos += len;
                                         }
-                                        ref_pos += len;
-                                        query_pos += len;
-                                    }
-                                    1 => {
-                                        // Insertion in read - associate with previous ref position
-                                        if ref_pos > 0 && ref_pos - 1 < cluster_pileup.len() && query_pos + len <= mapped_seq.len() {
-                                            let mut insertion_data = Vec::new();
-                                            for j in 0..len.min(MAX_INSERTION_LENGTH) {
-                                                let base = mapped_seq[query_pos + j];
-                                                let qual = mapped_qual[query_pos + j];
-                                                let hp_len = mapped_hp_lens[query_pos + j];
-                                                insertion_data.push((base, qual, hp_len));
+                                        1 => {
+                                            // Insertion in read - associate with previous ref position
+                                            if ref_pos > 0
+                                                && ref_pos - 1 < cluster_pileup.len()
+                                                && query_pos + len <= mapped_seq.len()
+                                            {
+                                                let mut insertion_data = Vec::new();
+                                                for j in 0..len.min(MAX_INSERTION_LENGTH) {
+                                                    let base = mapped_seq[query_pos + j];
+                                                    let qual = mapped_qual[query_pos + j];
+                                                    let hp_len = mapped_hp_lens[query_pos + j];
+                                                    insertion_data.push((base, qual, hp_len));
+                                                }
+                                                cluster_pileup[ref_pos - 1]
+                                                    .add_insertion(insertion_data);
                                             }
-                                            cluster_pileup[ref_pos - 1].add_insertion(insertion_data);
+                                            query_pos += len;
                                         }
-                                        query_pos += len;
-                                    }
-                                    2 => {
-                                        // Deletion in read - add deletion to pileup
-                                        for j in 0..len {
-                                            if ref_pos + j < cluster_pileup.len() {
-                                                cluster_pileup[ref_pos + j].add_deletion();
+                                        2 => {
+                                            // Deletion in read - add deletion to pileup
+                                            for j in 0..len {
+                                                if ref_pos + j < cluster_pileup.len() {
+                                                    cluster_pileup[ref_pos + j].add_deletion();
+                                                }
                                             }
+                                            ref_pos += len;
                                         }
-                                        ref_pos += len;
-                                    }
-                                    _ => {
-                                        log::warn!("Unexpected CIGAR operation in pileup: {}", op as char);
+                                        _ => {
+                                            log::warn!(
+                                                "Unexpected CIGAR operation in pileup: {}",
+                                                op as char
+                                            );
+                                        }
                                     }
                                 }
                             }
@@ -573,11 +625,14 @@ pub fn generate_consensus_pileups(
                     }
                 }
             }
-        }
 
-        log::trace!("Generated pileup for consensus {} with {} positions", cluster_idx, cluster_pileup.len());
-        pileups.lock().unwrap().push((cluster_idx, cluster_pileup));
-    });
+            log::trace!(
+                "Generated pileup for consensus {} with {} positions",
+                cluster_idx,
+                cluster_pileup.len()
+            );
+            pileups.lock().unwrap().push((cluster_idx, cluster_pileup));
+        });
 
     let mut pileups = pileups.into_inner().unwrap();
     pileups.sort_by_key(|k| k.0);
@@ -597,7 +652,8 @@ pub fn generate_consensus_pileups(
             // Calculate modal HP length
             if !hp_lengths.is_empty() {
                 // Count occurrences of each HP length
-                let mut counts: std::collections::HashMap<u8, usize> = std::collections::HashMap::new();
+                let mut counts: std::collections::HashMap<u8, usize> =
+                    std::collections::HashMap::new();
                 for &hp_len in &hp_lengths {
                     *counts.entry(hp_len).or_insert(0) += 1;
                 }
@@ -612,7 +668,8 @@ pub fn generate_consensus_pileups(
                     sorted_hp_lengths.sort_unstable();
                     let mid = sorted_hp_lengths.len() / 2;
                     if sorted_hp_lengths.len() % 2 == 0 {
-                        ((sorted_hp_lengths[mid - 1] as u16 + sorted_hp_lengths[mid] as u16) / 2) as u8
+                        ((sorted_hp_lengths[mid - 1] as u16 + sorted_hp_lengths[mid] as u16) / 2)
+                            as u8
                     } else {
                         sorted_hp_lengths[mid]
                     }
@@ -628,22 +685,32 @@ pub fn generate_consensus_pileups(
 
     // debug print out
 
-    if log::log_enabled!(log::Level::Trace){
+    if log::log_enabled!(log::Level::Trace) {
         for (i, pileup) in pileups.iter().enumerate() {
             log::trace!("Pileup for consensus {}:", i);
             for pos in pileup {
-                let bases_str: Vec<String> = pos.bases.iter().map(|b| {
-                    match b {
-                        PileupBase::Base(base, qual, hp_len) => format!("{}(q={},hp={})", *base as char, *qual, *hp_len),
+                let bases_str: Vec<String> = pos
+                    .bases
+                    .iter()
+                    .map(|b| match b {
+                        PileupBase::Base(base, qual, hp_len) => {
+                            format!("{}(q={},hp={})", *base as char, *qual, *hp_len)
+                        }
                         PileupBase::Deletion => String::from("D"),
                         PileupBase::Insertion(data) => {
                             let bases: Vec<u8> = data.iter().map(|(b, _, _)| *b).collect();
                             format!("I({})", String::from_utf8_lossy(&bases))
-                        },
-                    }
-                }).collect();
-                log::trace!("Pos {}: Ref base: {}, Ref HP len: {}, Depth: {}, Bases: {}",
-                    pos.ref_pos, pos.ref_base as char, pos.ref_hp_length, pos.depth(), bases_str.join(", "));
+                        }
+                    })
+                    .collect();
+                log::trace!(
+                    "Pos {}: Ref base: {}, Ref HP len: {}, Depth: {}, Bases: {}",
+                    pos.ref_pos,
+                    pos.ref_base as char,
+                    pos.ref_hp_length,
+                    pos.depth(),
+                    bases_str.join(", ")
+                );
             }
         }
     }
@@ -679,7 +746,10 @@ pub fn estimate_quality_error_rates(
         .map(|(idx, _)| *idx)
         .collect();
 
-    log::info!("Analyzing quality error rates from top {} clusters", top_clusters.len());
+    log::info!(
+        "Analyzing quality error rates from top {} clusters",
+        top_clusters.len()
+    );
 
     // Track errors and total bases per quality score
     let mut quality_stats: HashMap<u8, (usize, usize)> = HashMap::new(); // quality -> (errors, total)
@@ -725,7 +795,9 @@ pub fn estimate_quality_error_rates(
                     // Add quality stats for this position
                     for base_entry in &pileup.bases {
                         if let PileupBase::Base(base, qual, _hp_len) = base_entry {
-                            let entry = quality_stats.entry(*qual).or_insert((prior_count, prior_count));
+                            let entry = quality_stats
+                                .entry(*qual)
+                                .or_insert((prior_count, prior_count));
                             entry.1 += 1; // total count
                             if *base != pileup.ref_base {
                                 entry.0 += 1; // error count
@@ -738,7 +810,6 @@ pub fn estimate_quality_error_rates(
     }
 
     // Add prior count
-
 
     // Sort qualities for output
     let mut qualities: Vec<u8> = quality_stats.keys().cloned().collect();
@@ -755,8 +826,16 @@ pub fn estimate_quality_error_rates(
 
     // Output ASCII histogram
     log::debug!("=================================================================");
-    log::debug!("Quality Error Rate Histogram (from {} high-confidence positions)", total_bases_analyzed);
-    log::debug!("Overall error rate: {:.4}% ({}/{})", overall_error_rate * 100.0, total_errors, total_bases_analyzed);
+    log::debug!(
+        "Quality Error Rate Histogram (from {} high-confidence positions)",
+        total_bases_analyzed
+    );
+    log::debug!(
+        "Overall error rate: {:.4}% ({}/{})",
+        overall_error_rate * 100.0,
+        total_errors,
+        total_bases_analyzed
+    );
     log::debug!("=================================================================");
 
     for qual in qualities {
@@ -779,10 +858,13 @@ pub fn estimate_quality_error_rates(
     }
     log::debug!("=================================================================");
 
-    return quality_stats.iter().map(|(&q, &(e, t))| {
-        let rate = if t > 0 { e as f64 / t as f64 } else { 0.0 };
-        (q, rate)
-    }).collect();
+    return quality_stats
+        .iter()
+        .map(|(&q, &(e, t))| {
+            let rate = if t > 0 { e as f64 / t as f64 } else { 0.0 };
+            (q, rate)
+        })
+        .collect();
 }
 
 /// Log-sum-exp trick for numerically stable log(exp(a) + exp(b))
@@ -818,7 +900,15 @@ pub fn write_clusters_tsv(
             consensus.id,
             cluster.len(),
             representative,
-            cluster.iter().map(|x| format!("{} {}", &twin_reads[*x].id, &twin_reads[*x].est_id.unwrap_or(100.))).collect::<Vec<_>>().join("\n")
+            cluster
+                .iter()
+                .map(|x| format!(
+                    "{} {}",
+                    &twin_reads[*x].id,
+                    &twin_reads[*x].est_id.unwrap_or(100.)
+                ))
+                .collect::<Vec<_>>()
+                .join("\n")
         )?;
     }
 
@@ -836,20 +926,28 @@ pub fn write_final_assignments(
     debug_to_final: &std::collections::HashMap<usize, usize>,
     output_path: &std::path::Path,
 ) -> std::io::Result<()> {
-    use std::io::{BufRead, BufReader, BufWriter, Write};
     use std::collections::HashMap;
+    use std::io::{BufRead, BufReader, BufWriter, Write};
 
     // Build final_idx → (asv_label, asv_len) from consensuses (already depth-sorted, ids reassigned)
-    let idx_to_info: HashMap<usize, (String, usize)> = consensuses.iter().enumerate().map(|(i, c)| {
-        let depth_str = if c.per_sample_depths.is_empty() {
-            (c.depth + c.appended_depth).to_string()
-        } else {
-            c.per_sample_depths.iter().map(|d| d.to_string()).collect::<Vec<_>>().join("-")
-        };
-        let label = format!("final_asv_{}_depth_{}", i, depth_str);
-        let asv_len: usize = c.hp_lengths.iter().map(|&x| x as usize).sum();
-        (i, (label, asv_len))
-    }).collect();
+    let idx_to_info: HashMap<usize, (String, usize)> = consensuses
+        .iter()
+        .enumerate()
+        .map(|(i, c)| {
+            let depth_str = if c.per_sample_depths.is_empty() {
+                (c.depth + c.appended_depth).to_string()
+            } else {
+                c.per_sample_depths
+                    .iter()
+                    .map(|d| d.to_string())
+                    .collect::<Vec<_>>()
+                    .join("-")
+            };
+            let label = format!("final_asv_{}_depth_{}", i, depth_str);
+            let asv_len: usize = c.hp_lengths.iter().map(|&x| x as usize).sum();
+            (i, (label, asv_len))
+        })
+        .collect();
 
     // Parse read_to_asv_mappings.tsv: keep only the first (best) row per read.
     // k-mer/EM path columns: read_id, debug_id:N, snpmer_mm, minimap2_nm
@@ -860,11 +958,16 @@ pub fn write_final_assignments(
         for line in reader.lines() {
             let line = line?;
             let parts: Vec<&str> = line.splitn(5, '\t').collect();
-            if parts.len() < 3 { continue; }
+            if parts.len() < 3 {
+                continue;
+            }
             let read_id = parts[0].to_string();
-            if read_to_asv.contains_key(&read_id) { continue; } // first row wins
+            if read_to_asv.contains_key(&read_id) {
+                continue;
+            } // first row wins
             let debug_id: usize = parts[1]
-                .strip_prefix("debug_id:").and_then(|s| s.parse().ok())
+                .strip_prefix("debug_id:")
+                .and_then(|s| s.parse().ok())
                 .unwrap_or(usize::MAX);
             // 4-column (k-mer/EM): col3 is minimap2_nm; 3-column (minimap2): col2 is nm
             let nm: i32 = if parts.len() >= 4 {
@@ -879,7 +982,10 @@ pub fn write_final_assignments(
     }
 
     let mut writer = BufWriter::new(std::fs::File::create(output_path)?);
-    writeln!(writer, "read_id\tasv\talignment_identity\test_read_identity")?;
+    writeln!(
+        writer,
+        "read_id\tasv\talignment_identity\test_read_identity"
+    )?;
 
     for read in twin_reads {
         let est = match read.est_id {
@@ -888,13 +994,16 @@ pub fn write_final_assignments(
         };
         match read_to_asv.get(&read.id) {
             Some(&(final_idx, nm)) => {
-                let (label, asv_len) = idx_to_info.get(&final_idx)
+                let (label, asv_len) = idx_to_info
+                    .get(&final_idx)
                     .map(|(l, len)| (l.as_str(), *len))
                     .unwrap_or(("unassigned", 1));
                 let identity = if asv_len > 0 {
                     let nm_clamped = (nm as usize).min(asv_len);
                     (asv_len - nm_clamped) as f64 / asv_len as f64 * 100.0
-                } else { 0.0 };
+                } else {
+                    0.0
+                };
                 writeln!(writer, "{}\t{}\t{:.4}\t{}", read.id, label, identity, est)?;
             }
             None => {
@@ -919,12 +1028,27 @@ pub fn write_consensus_fasta(
         let mut cons_clone = consensus.clone();
         cons_clone.decompress();
         let consensus_seq = cons_clone.decompressed_sequence.clone().unwrap();
-        let start_non = consensus_seq.iter().enumerate().find(|&(_i, &b)| b != b'N').map(|(i, _)| i).unwrap_or(0);
-        let end_non = consensus_seq.iter().enumerate().rfind(|&(_i, &b)| b != b'N').map(|(i, _)| i + 1).unwrap_or(consensus_seq.len());
+        let start_non = consensus_seq
+            .iter()
+            .enumerate()
+            .find(|&(_i, &b)| b != b'N')
+            .map(|(i, _)| i)
+            .unwrap_or(0);
+        let end_non = consensus_seq
+            .iter()
+            .enumerate()
+            .rfind(|&(_i, &b)| b != b'N')
+            .map(|(i, _)| i + 1)
+            .unwrap_or(consensus_seq.len());
         let depth_field = if consensus.per_sample_depths.is_empty() {
             (consensus.depth + consensus.appended_depth).to_string()
         } else {
-            consensus.per_sample_depths.iter().map(|d| d.to_string()).collect::<Vec<_>>().join("-")
+            consensus
+                .per_sample_depths
+                .iter()
+                .map(|d| d.to_string())
+                .collect::<Vec<_>>()
+                .join("-")
         };
         let header = format!(">{}_asv_{}_depth_{} debug_id:{} chimera_score:{} unambiguous_read_assignments:{} ambig_read_assignments:{} num_align_leq_10_mismatches:{}",
             prefix, i, depth_field, consensus.id, consensus.chimera_score.unwrap_or(0), consensus.unambig_best_read_map_count.unwrap_or(0),
@@ -955,10 +1079,10 @@ pub fn analyze_pileup_consensuses(
     let deletion_insertion_quality = 48u8; // Fixed quality for indels
 
     // Get error rate for deletions/insertions
-    let indel_error_rate = quality_error_map.get(&deletion_insertion_quality)
+    let indel_error_rate = quality_error_map
+        .get(&deletion_insertion_quality)
         .copied()
         .unwrap_or(DEFAULT_ERR_RATE); // Default 2% if not in map
-
 
     // Select consensuses to debug: most abundant (highest depth), 10th percentile, 90th percentile
     let mut sorted_by_depth: Vec<(usize, usize)> = consensuses
@@ -967,12 +1091,13 @@ pub fn analyze_pileup_consensuses(
         .map(|(idx, cons)| (idx, cons.depth))
         .collect();
     sorted_by_depth.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
-    
+
     let debug_indices: Vec<usize> = vec![30];
 
     // Process each consensus
     for (cluster_idx, cluster_pileup) in pileups.iter_mut().enumerate() {
-        let min_coverage = (cluster_pileup.iter().map(|p| p.depth()).max().unwrap_or(0) / 3).max(min_coverage_abs);
+        let min_coverage =
+            (cluster_pileup.iter().map(|p| p.depth()).max().unwrap_or(0) / 3).max(min_coverage_abs);
         if cluster_pileup.is_empty() {
             continue;
         }
@@ -988,8 +1113,7 @@ pub fn analyze_pileup_consensuses(
                 trimmed_depths.push(pileup.depth());
                 start_idx = i;
                 break;
-            }
-            else{
+            } else {
                 trimmed_depths.push(pileup.depth());
             }
         }
@@ -1000,20 +1124,21 @@ pub fn analyze_pileup_consensuses(
                 trimmed_depths.push(pileup.depth());
                 end_idx = i + 1;
                 break;
-            }
-            else{
+            } else {
                 trimmed_depths.push(pileup.depth());
             }
         }
 
         if start_idx >= end_idx {
-            log::warn!("Consensus {} has no positions with sufficient coverage", cluster_idx);
+            log::warn!(
+                "Consensus {} has no positions with sufficient coverage",
+                cluster_idx
+            );
             continue;
         }
 
         log::debug!("Consensus {}: Trimming from {}-{} to {}-{} with min depth {}. Trimmed depths at ends: {:?}",
             cluster_idx, 0, cluster_pileup.len(), start_idx, end_idx, min_coverage, trimmed_depths);
-
 
         // Update pileup to trimmed version
         *cluster_pileup = cluster_pileup[start_idx..end_idx].to_vec();
@@ -1033,7 +1158,10 @@ pub fn analyze_pileup_consensuses(
             for base_entry in &pileup.bases {
                 match base_entry {
                     PileupBase::Base(obs_base, qual, _hp_len) => {
-                        let error_rate = quality_error_map.get(qual).copied().unwrap_or(DEFAULT_ERR_RATE);
+                        let error_rate = quality_error_map
+                            .get(qual)
+                            .copied()
+                            .unwrap_or(DEFAULT_ERR_RATE);
                         let accuracy = 1.0 - error_rate;
 
                         if *obs_base == ref_base {
@@ -1053,16 +1181,30 @@ pub fn analyze_pileup_consensuses(
                     }
                     PileupBase::Insertion(insertion_data) => {
                         // Add another single evidence since the base before the insertion is not actually correct
-                        let first_qual = insertion_data.first().map(|(_, q, _)| *q).unwrap_or(deletion_insertion_quality);
-                        let error_rate = quality_error_map.get(&first_qual).copied().unwrap_or(DEFAULT_ERR_RATE);
+                        let first_qual = insertion_data
+                            .first()
+                            .map(|(_, q, _)| *q)
+                            .unwrap_or(deletion_insertion_quality);
+                        let error_rate = quality_error_map
+                            .get(&first_qual)
+                            .copied()
+                            .unwrap_or(DEFAULT_ERR_RATE);
                         log_prob_not_ref += (1.0 - error_rate).ln();
                         log_prob_ref += error_rate.ln();
 
-                        let error_rates: Vec<f64> = insertion_data.iter().take(0)
-                            .map(|(_, q, _)| quality_error_map.get(q).copied().unwrap_or(DEFAULT_ERR_RATE))
+                        let error_rates: Vec<f64> = insertion_data
+                            .iter()
+                            .take(0)
+                            .map(|(_, q, _)| {
+                                quality_error_map
+                                    .get(q)
+                                    .copied()
+                                    .unwrap_or(DEFAULT_ERR_RATE)
+                            })
                             .collect();
                         log_prob_ref += error_rates.iter().map(|&er| er.ln()).sum::<f64>();
-                        log_prob_not_ref += error_rates.iter().map(|&er| (1.0 - er).ln()).sum::<f64>();
+                        log_prob_not_ref +=
+                            error_rates.iter().map(|&er| (1.0 - er).ln()).sum::<f64>();
                     }
                 }
             }
@@ -1073,32 +1215,50 @@ pub fn analyze_pileup_consensuses(
             let alt_posterior = log_prob_not_ref - log_normalizer;
 
             //if alt_posterior > -30.0 {
-            let post_threshold = args.posterior_threshold_ln.min((args.min_cluster_size * 3) as f64);
+            let post_threshold = args
+                .posterior_threshold_ln
+                .min((args.min_cluster_size * 3) as f64);
             if alt_posterior > -post_threshold {
                 log::debug!("Low posterior probability at consensus {}, covs: {:?},  position {}: alternate_posterior {:.6}, log_prob_ref {:.4}, log_prob_not_ref {:.4}, depth {}, range {}-{}",
                     cluster_idx, pileup.depth_nodeletion(),  pileup.ref_pos, alt_posterior, log_prob_ref, log_prob_not_ref, pileup.depth(), start_idx, end_idx);
-                let ref_count = pileup.bases.iter().filter(|b| {
-                    if let PileupBase::Base(base, _, _) = b {
-                        *base == ref_base
-                    } else {
-                        false
-                    }
-                }).count();
+                let ref_count = pileup
+                    .bases
+                    .iter()
+                    .filter(|b| {
+                        if let PileupBase::Base(base, _, _) = b {
+                            *base == ref_base
+                        } else {
+                            false
+                        }
+                    })
+                    .count();
                 let non_ref_base_count = pileup.depth() - ref_count;
-                log::debug!("    Reference base: {}, Ref count: {}, Non-ref count: {}", ref_base as char, ref_count, non_ref_base_count);
+                log::debug!(
+                    "    Reference base: {}, Ref count: {}, Non-ref count: {}",
+                    ref_base as char,
+                    ref_count,
+                    non_ref_base_count
+                );
                 //print top 20 bases
                 let mut dbg_string = String::from("Bases: ");
                 for base_entry in pileup.bases.iter().take(20) {
                     match base_entry {
                         PileupBase::Base(obs_base, qual, hp_len) => {
-                            dbg_string.push_str(&format!(" Base: {} (q={}, hp={}) ", *obs_base as char, *qual, *hp_len));
+                            dbg_string.push_str(&format!(
+                                " Base: {} (q={}, hp={}) ",
+                                *obs_base as char, *qual, *hp_len
+                            ));
                         }
                         PileupBase::Deletion => {
                             dbg_string.push_str(" Deletion ");
                         }
                         PileupBase::Insertion(insertion_data) => {
-                            let bases: Vec<u8> = insertion_data.iter().map(|(b, _, _)| *b).collect();
-                            dbg_string.push_str(&format!(" Insertion: {} ", String::from_utf8_lossy(&bases)));
+                            let bases: Vec<u8> =
+                                insertion_data.iter().map(|(b, _, _)| *b).collect();
+                            dbg_string.push_str(&format!(
+                                " Insertion: {} ",
+                                String::from_utf8_lossy(&bases)
+                            ));
                         }
                     }
                 }
@@ -1111,11 +1271,14 @@ pub fn analyze_pileup_consensuses(
 
         // 3. Debug output for selected consensuses
         let debug_posterior = true;
-        if debug_posterior{
+        if debug_posterior {
             if debug_indices.contains(&cluster_idx) {
                 log::debug!("=================================================================");
-                log::debug!("Posterior probabilities for consensus {} (depth {})",
-                    cluster_idx, consensuses.get(cluster_idx).map(|c| c.depth).unwrap_or(0));
+                log::debug!(
+                    "Posterior probabilities for consensus {} (depth {})",
+                    cluster_idx,
+                    consensuses.get(cluster_idx).map(|c| c.depth).unwrap_or(0)
+                );
                 log::debug!("Position range: {}-{}", start_idx, end_idx);
                 log::debug!("=================================================================");
 
@@ -1154,13 +1317,12 @@ pub fn analyze_pileup_consensuses(
                 log::debug!("=================================================================");
             }
         }
-
     }
 
     let cons_len = consensuses.len();
     for i in 0..cons_len {
         let mut low_confidence_positions = vec![];
-        for pileup in &pileups[i]{
+        for pileup in &pileups[i] {
             if let Some(_) = pileup.alt_posterior {
                 low_confidence_positions.push(pileup.ref_pos);
             }
@@ -1176,46 +1338,77 @@ pub fn analyze_pileup_consensuses(
         let start_polish = bad_length_threshold + left_start;
         let end_polish = right_end - bad_length_threshold;
 
-        let low_conf_region_left = low_confidence_positions.iter()
-        .filter(|&&pos| pos < start_polish).map(|x| *x).max().unwrap_or(left_start);
-        let low_conf_region_right = low_confidence_positions.iter()
-        .filter(|&&pos| pos >= end_polish).map(|x| *x).min().unwrap_or(right_end);
+        let low_conf_region_left = low_confidence_positions
+            .iter()
+            .filter(|&&pos| pos < start_polish)
+            .map(|x| *x)
+            .max()
+            .unwrap_or(left_start);
+        let low_conf_region_right = low_confidence_positions
+            .iter()
+            .filter(|&&pos| pos >= end_polish)
+            .map(|x| *x)
+            .min()
+            .unwrap_or(right_end);
 
         let consensus = &mut consensuses[i];
         if low_conf_region_left > 0 {
-            log::debug!("Consensus {}: Masking low-confidence region at start up to position {}", i, low_conf_region_left);
+            log::debug!(
+                "Consensus {}: Masking low-confidence region at start up to position {}",
+                i,
+                low_conf_region_left
+            );
             for pos in 0..low_conf_region_left {
                 consensus.sequence[pos] = b'N';
             }
         }
         if low_conf_region_right < consensus.sequence.len() {
-            log::debug!("Consensus {}: Masking low-confidence region at end from position {} to {}", i, low_conf_region_right, consensus.sequence.len());
+            log::debug!(
+                "Consensus {}: Masking low-confidence region at end from position {} to {}",
+                i,
+                low_conf_region_right,
+                consensus.sequence.len()
+            );
             for pos in low_conf_region_right..consensus.sequence.len() {
                 consensus.sequence[pos] = b'N';
             }
         }
         let pileups = &pileups[i];
-        for pileup in pileups.iter(){
+        for pileup in pileups.iter() {
             if let Some(_) = pileup.alt_posterior {
-                if args.mask_low_quality{
+                if args.mask_low_quality {
                     consensus.sequence[pileup.ref_pos] = b'N';
                 }
                 if pileup.ref_pos > low_conf_region_left && pileup.ref_pos < low_conf_region_right {
-                    log::debug!("Consensus {}: Marking position {} as low quality, ends {}-{}", i, pileup.ref_pos, low_conf_region_left, low_conf_region_right);
+                    log::debug!(
+                        "Consensus {}: Marking position {} as low quality, ends {}-{}",
+                        i,
+                        pileup.ref_pos,
+                        low_conf_region_left,
+                        low_conf_region_right
+                    );
                     consensus.low_quality_positions.push(pileup.ref_pos);
                 }
             }
         }
     }
 
-    
-    let low_quality_consensuses = consensuses.iter().filter(|c| lq_criteria(c, args)).map(|c| c.clone()).collect::<Vec<_>>();
+    let low_quality_consensuses = consensuses
+        .iter()
+        .filter(|c| lq_criteria(c, args))
+        .map(|c| c.clone())
+        .collect::<Vec<_>>();
     let mut lq_ids: Vec<usize> = low_quality_consensuses.iter().map(|c| c.id).collect();
     lq_ids.sort_unstable();
     log::info!("Low quality consensus sequences: {:?}", lq_ids);
     let low_quality_cluster_file = temp_dir.join("low_quality_clusters.tsv");
-    write_clusters_tsv(&low_quality_consensuses, twin_reads, &low_quality_cluster_file, "low_quality")
-        .expect("Failed to write low_quality_clusters.tsv");
+    write_clusters_tsv(
+        &low_quality_consensuses,
+        twin_reads,
+        &low_quality_cluster_file,
+        "low_quality",
+    )
+    .expect("Failed to write low_quality_clusters.tsv");
     log::info!("Wrote low quality cluster information to low_quality_clusters.tsv");
     consensuses.retain(|c| !lq_criteria(c, args));
 
@@ -1223,21 +1416,22 @@ pub fn analyze_pileup_consensuses(
     let postfilter_file = temp_dir.join("clusters_after_quality_filter_stage4.tsv");
     write_clusters_tsv(consensuses, twin_reads, &postfilter_file, "prefilter")
         .expect("Failed to write clusters_after_quality_filter_stage4.tsv");
-    log::info!("Wrote cluster information before filtering to clusters_after_quality_filter_stage4.tsv");
-
+    log::info!(
+        "Wrote cluster information before filtering to clusters_after_quality_filter_stage4.tsv"
+    );
 
     log::info!("Polishing complete");
 
     //Write to new fasta
 
-
-
     return low_quality_consensuses;
 }
 
 fn lq_criteria(consensus: &ConsensusSequence, args: &Cli) -> bool {
-    (consensus.low_quality_positions.len() > 0) && 
-    (consensus.depth / ((consensus.low_quality_positions.len() * consensus.low_quality_positions.len())) < args.n_depth_cutoff)
+    (consensus.low_quality_positions.len() > 0)
+        && (consensus.depth
+            / (consensus.low_quality_positions.len() * consensus.low_quality_positions.len())
+            < args.n_depth_cutoff)
 }
 
 fn remove_similar_seqs_kmers(mut consensuses: Vec<ConsensusSequence>) -> Vec<ConsensusSequence> {
@@ -1247,12 +1441,18 @@ fn remove_similar_seqs_kmers(mut consensuses: Vec<ConsensusSequence>) -> Vec<Con
     let adapter_buffer = 25;
 
     for (i, consensus) in consensuses.iter().enumerate() {
-        if consensus.sequence.len() < 100{
+        if consensus.sequence.len() < 100 {
             continue;
         }
         let mut minimizers = vec![];
         let mut positions = vec![];
-        seeding::minimizer_seeds_positions(&consensus.sequence[adapter_buffer..consensus.sequence.len()-adapter_buffer], &mut minimizers, &mut positions, 10, 21);
+        seeding::minimizer_seeds_positions(
+            &consensus.sequence[adapter_buffer..consensus.sequence.len() - adapter_buffer],
+            &mut minimizers,
+            &mut positions,
+            10,
+            21,
+        );
         for &mini in minimizers.iter() {
             kmer_index.entry(mini).or_insert_with(Vec::new).push(i);
         }
@@ -1266,7 +1466,7 @@ fn remove_similar_seqs_kmers(mut consensuses: Vec<ConsensusSequence>) -> Vec<Con
         let mut possible_greater_ids = std::collections::HashSet::new();
         let mut first = true;
         for mini in minimizers {
-            if first{
+            if first {
                 if let Some(ids) = kmer_index.get(mini) {
                     for id in ids {
                         if consensuses[*id].depth / 2 > consensuses[enum_id].depth {
@@ -1274,11 +1474,16 @@ fn remove_similar_seqs_kmers(mut consensuses: Vec<ConsensusSequence>) -> Vec<Con
                         }
                     }
                 }
-            }
-            else{
+            } else {
                 if let Some(ids) = kmer_index.get(mini) {
-                    let id_set = ids.iter().cloned().collect::<std::collections::HashSet<usize>>();
-                    possible_greater_ids = possible_greater_ids.intersection(&id_set).cloned().collect();
+                    let id_set = ids
+                        .iter()
+                        .cloned()
+                        .collect::<std::collections::HashSet<usize>>();
+                    possible_greater_ids = possible_greater_ids
+                        .intersection(&id_set)
+                        .cloned()
+                        .collect();
                 }
             }
             first = false;
@@ -1305,19 +1510,24 @@ pub fn merge_similar_consensuses(
         return consensuses;
     }
 
-    
     // Look at [35,length-35] bases to avoid adapters. Take all k-mers. Remove subsetted reads at lower depth.
     log::info!("Removing duplicate consensus sequences based on k-mer similarity");
     let prev_size = consensuses.len();
     let consensuses = remove_similar_seqs_kmers(consensuses);
-    log::info!("Reduced consensus sequences from {} to {} after k-mer based deduplication", prev_size, consensuses.len());
+    log::info!(
+        "Reduced consensus sequences from {} to {} after k-mer based deduplication",
+        prev_size,
+        consensuses.len()
+    );
 
     // Write polished consensus sequences to FASTA for indexing
     let output_fasta_path = temp_dir.join("polished_consensuses.fasta");
     write_consensus_fasta(&consensuses, &output_fasta_path, "polished")
         .expect("Failed to write polished_consensuses.fasta");
-    log::info!("Wrote {} polished consensus sequences to polished_consensuses.fasta", consensuses.len());
-
+    log::info!(
+        "Wrote {} polished consensus sequences to polished_consensuses.fasta",
+        consensuses.len()
+    );
 
     // Build aligner using the first consensus as reference
     let mut aligner = Aligner::builder()
@@ -1329,12 +1539,15 @@ pub fn merge_similar_consensuses(
 
     aligner.mapopt.set_no_diag();
     aligner.mapopt.best_n = 75;
-    
+
     // Store mappings: (query_idx, target_idx, nm, target_depth)
     let mappings = Mutex::new(Vec::new());
 
     // First, merge low quality consensuses into high quality consensuses
-    log::info!("Merging {} low quality consensuses into high quality consensuses", low_qual_consensuses.len());
+    log::info!(
+        "Merging {} low quality consensuses into high quality consensuses",
+        low_qual_consensuses.len()
+    );
     let low_qual_mappings = Mutex::new(Vec::new());
 
     low_qual_consensuses.par_iter().enumerate().for_each(|(low_qual_idx, low_qual_consensus)| {
@@ -1506,19 +1719,22 @@ pub fn merge_similar_consensuses(
             let mut ref_to_query_mappings = vec![];
             for (t_idx, nm, t_depth) in &valid_targets {
                 if consensuses[*t_idx].depth == consensuses[query_idx].depth {
-                    if *nm == 0{
+                    if *nm == 0 {
                         // Perfect match with identical depth, merge based on index to avoid circular merges
-                        if query_idx > *t_idx{
+                        if query_idx > *t_idx {
                             merge_map.insert(query_idx, *t_idx);
                         }
                     }
                     continue; // Skip identical depth consensuses here to avoid circular merges
-                }
-                else if consensuses[*t_idx].depth > consensuses[query_idx].depth {
+                } else if consensuses[*t_idx].depth > consensuses[query_idx].depth {
                     query_to_ref_mappings.push((*t_idx, *nm, *t_depth, query_idx));
-                }
-                else{
-                    ref_to_query_mappings.push((query_idx, *nm, consensuses[query_idx].depth, *t_idx) );
+                } else {
+                    ref_to_query_mappings.push((
+                        query_idx,
+                        *nm,
+                        consensuses[query_idx].depth,
+                        *t_idx,
+                    ));
                 }
             }
             if query_to_ref_mappings.len() > 0 {
@@ -1584,7 +1800,13 @@ pub fn merge_similar_consensuses(
         if !new_clusters[idx].is_empty() {
             let new_depth = new_clusters[idx].len();
             let new_cluster = new_clusters[idx].clone();
-            let mut new_cons = ConsensusSequence::new(consensus.sequence, consensus.hp_lengths, new_depth, consensus.id, new_cluster);
+            let mut new_cons = ConsensusSequence::new(
+                consensus.sequence,
+                consensus.hp_lengths,
+                new_depth,
+                consensus.id,
+                new_cluster,
+            );
             new_cons.decompress();
             new_consensuses.push(new_cons);
         }
@@ -1597,11 +1819,11 @@ pub fn merge_similar_consensuses(
     );
 
     new_consensuses.sort_by(|a, b| {
-        b.depth.cmp(&a.depth)
+        b.depth
+            .cmp(&a.depth)
             .then_with(|| a.sequence.cmp(&b.sequence))
             .then_with(|| a.id.cmp(&b.id))
     });
-
 
     let final_file = temp_dir.join("final_clusters_merged_stage5.tsv");
     write_clusters_tsv(&new_consensuses, twin_reads, &final_file, "final")
@@ -1611,7 +1833,10 @@ pub fn merge_similar_consensuses(
     let merged_fasta = temp_dir.join("merged_consensus_sequences.fasta");
     write_consensus_fasta(&new_consensuses, &merged_fasta, "merged")
         .expect("Failed to write merged_consensus_sequences.fasta");
-    log::info!("Wrote {} merged consensus sequences to merged_consensus_sequences.fasta", new_consensuses.len());
+    log::info!(
+        "Wrote {} merged consensus sequences to merged_consensus_sequences.fasta",
+        new_consensuses.len()
+    );
 
     new_consensuses
 }
@@ -1637,9 +1862,24 @@ mod determinism_tests {
     #[test]
     fn equivalence_classes_have_canonical_iteration_order() {
         let mut classes = HashMap::new();
-        classes.insert(EquivalenceClass { asv_indices: vec![3] }, 4);
-        classes.insert(EquivalenceClass { asv_indices: vec![0, 2] }, 7);
-        classes.insert(EquivalenceClass { asv_indices: vec![0, 1] }, 5);
+        classes.insert(
+            EquivalenceClass {
+                asv_indices: vec![3],
+            },
+            4,
+        );
+        classes.insert(
+            EquivalenceClass {
+                asv_indices: vec![0, 2],
+            },
+            7,
+        );
+        classes.insert(
+            EquivalenceClass {
+                asv_indices: vec![0, 1],
+            },
+            5,
+        );
 
         let sorted = sorted_equivalence_classes(classes);
         let keys: Vec<Vec<usize>> = sorted
@@ -1685,7 +1925,11 @@ fn refine_asv_depths_with_minimap2(
         .with_index(asv_fasta_path.to_str().unwrap(), None)
         .expect("Failed to build minimap2 index for ASVs");
 
-    log::info!("Mapping {} reads to {} ASVs via minimap2", twin_reads.len(), consensuses.len());
+    log::info!(
+        "Mapping {} reads to {} ASVs via minimap2",
+        twin_reads.len(),
+        consensuses.len()
+    );
 
     let eq_classes: Mutex<HashMap<EquivalenceClass, usize>> = Mutex::new(HashMap::new());
     let filtered_reads_count = Mutex::new(0usize);
@@ -1702,11 +1946,18 @@ fn refine_asv_depths_with_minimap2(
     let num_map_leq_10nm = Mutex::new(vec![0usize; consensuses.len()]);
 
     twin_reads.par_iter().for_each(|twin_read| {
-        let seq: Vec<u8> = twin_read.dna_seq.iter().map(|x| x.to_char().to_ascii_uppercase() as u8).collect();
-        let mappings = aligner.map(&seq, true, false, None, None, None).unwrap_or_default();
+        let seq: Vec<u8> = twin_read
+            .dna_seq
+            .iter()
+            .map(|x| x.to_char().to_ascii_uppercase() as u8)
+            .collect();
+        let mappings = aligner
+            .map(&seq, true, false, None, None, None)
+            .unwrap_or_default();
 
         // Keep only primary/supplementary hits with mapq > 0
-        let valid: Vec<_> = mappings.iter()
+        let valid: Vec<_> = mappings
+            .iter()
             .filter(|m| m.mapq > 0 && m.alignment.is_some())
             .collect();
 
@@ -1716,13 +1967,15 @@ fn refine_asv_depths_with_minimap2(
         }
 
         // Find the best NM among valid hits
-        let best_nm = valid.iter()
+        let best_nm = valid
+            .iter()
             .map(|m| m.alignment.as_ref().unwrap().nm)
             .min()
             .unwrap();
 
         // Collect all hits tied at the best NM
-        let mut best_asv_indices: Vec<usize> = valid.iter()
+        let mut best_asv_indices: Vec<usize> = valid
+            .iter()
             .filter(|m| m.alignment.as_ref().unwrap().nm == best_nm)
             .map(|m| m.target_id as usize)
             .collect();
@@ -1732,8 +1985,12 @@ fn refine_asv_depths_with_minimap2(
         {
             let mut writer = mapping_file_writer.lock().unwrap();
             for &asv_idx in &best_asv_indices {
-                writeln!(writer, "{}\tdebug_id:{}\t{}", twin_read.id, consensuses[asv_idx].id, best_nm)
-                    .expect("Failed to write read_to_asv_mappings.tsv");
+                writeln!(
+                    writer,
+                    "{}\tdebug_id:{}\t{}",
+                    twin_read.id, consensuses[asv_idx].id, best_nm
+                )
+                .expect("Failed to write read_to_asv_mappings.tsv");
             }
         }
 
@@ -1752,7 +2009,9 @@ fn refine_asv_depths_with_minimap2(
             }
         }
 
-        let eq_class = EquivalenceClass { asv_indices: best_asv_indices };
+        let eq_class = EquivalenceClass {
+            asv_indices: best_asv_indices,
+        };
         *eq_classes.lock().unwrap().entry(eq_class).or_insert(0) += 1;
         *total_assigned_reads.lock().unwrap() += 1;
     });
@@ -1761,10 +2020,15 @@ fn refine_asv_depths_with_minimap2(
     let filtered_reads = filtered_reads_count.into_inner().unwrap();
     let total_assigned = total_assigned_reads.into_inner().unwrap();
 
-    log::info!("Filtered {} reads with no valid minimap2 mapping", filtered_reads);
+    log::info!(
+        "Filtered {} reads with no valid minimap2 mapping",
+        filtered_reads
+    );
     log::info!("Total assigned reads: {}", total_assigned);
-    log::info!("Total percentage assigned: {:.2}%",
-        (total_assigned as f64 / (total_assigned + filtered_reads) as f64) * 100.0);
+    log::info!(
+        "Total percentage assigned: {:.2}%",
+        (total_assigned as f64 / (total_assigned + filtered_reads) as f64) * 100.0
+    );
 
     let unambig_read_map_count = unambig_read_map_count.into_inner().unwrap();
     let ambig_read_map_count = ambig_read_map_count.into_inner().unwrap();
@@ -1785,7 +2049,10 @@ fn refine_asv_depths_with_minimap2(
     let mut asv_abundances = vec![1.0 / num_asvs as f64; num_asvs];
     let convergence_threshold = 0.01 / total_assigned as f64;
 
-    log::info!("Running EM algorithm with convergence threshold: {:.6e}", convergence_threshold);
+    log::info!(
+        "Running EM algorithm with convergence threshold: {:.6e}",
+        convergence_threshold
+    );
 
     let mut iteration = 0;
     const MAX_ITERATIONS: usize = 10000;
@@ -1795,7 +2062,9 @@ fn refine_asv_depths_with_minimap2(
         let mut new_asv_abundances = vec![0.0; num_asvs];
 
         for (eq_class, count) in &eq_classes {
-            let denominator: f64 = eq_class.asv_indices.iter()
+            let denominator: f64 = eq_class
+                .asv_indices
+                .iter()
                 .map(|&asv_idx| asv_abundances[asv_idx])
                 .sum();
 
@@ -1814,7 +2083,8 @@ fn refine_asv_depths_with_minimap2(
             }
         }
 
-        let max_change = asv_abundances.iter()
+        let max_change = asv_abundances
+            .iter()
             .zip(new_asv_abundances.iter())
             .map(|(old, new)| (old - new).abs())
             .fold(0.0, f64::max);
@@ -1822,7 +2092,11 @@ fn refine_asv_depths_with_minimap2(
         asv_abundances = new_asv_abundances;
 
         if max_change < convergence_threshold || iteration >= MAX_ITERATIONS {
-            log::info!("EM converged after {} iterations (max change: {:.6e})", iteration, max_change);
+            log::info!(
+                "EM converged after {} iterations (max change: {:.6e})",
+                iteration,
+                max_change
+            );
             break;
         }
     }
@@ -1842,9 +2116,15 @@ fn refine_asv_depths_with_minimap2(
     consensuses.retain(|c| c.depth > 0);
     let filtered_count = original_count - consensuses.len();
     if filtered_count > 0 {
-        log::info!("Filtered {} ASVs with zero depth after EM refinement (minimap2 path)", filtered_count);
+        log::info!(
+            "Filtered {} ASVs with zero depth after EM refinement (minimap2 path)",
+            filtered_count
+        );
     }
-    log::info!("EM refinement complete (minimap2 path): {} ASVs remaining", consensuses.len());
+    log::info!(
+        "EM refinement complete (minimap2 path): {} ASVs remaining",
+        consensuses.len()
+    );
 }
 
 /// Refine ASV depths using EM algorithm on read-level mappings
@@ -1877,8 +2157,18 @@ pub fn refine_asv_depths_with_em(
     write_consensus_fasta(&consensuses, &asv_fasta_path, "em_refinement")
         .expect("Failed to write ASVs for EM refinement");
 
-    let asv_twin_reads = kmer_comp::twin_reads_from_fasta(&asv_fasta_path, kmer_info, args.kmer_size, args.c, args.blockmer_length, args.minimum_base_quality);
-    log::info!("Loaded {} ASVs as TwinReads for k-mer comparison", asv_twin_reads.len());
+    let asv_twin_reads = kmer_comp::twin_reads_from_fasta(
+        &asv_fasta_path,
+        kmer_info,
+        args.kmer_size,
+        args.c,
+        args.blockmer_length,
+        args.minimum_base_quality,
+    );
+    log::info!(
+        "Loaded {} ASVs as TwinReads for k-mer comparison",
+        asv_twin_reads.len()
+    );
 
     // Step 2: Build SNPmer index for all ASVs
     let k = args.kmer_size;
@@ -1889,12 +2179,22 @@ pub fn refine_asv_depths_with_em(
         let asv_snpmers = asv_read.snpmers_vec();
         for (_pos, kmer) in asv_snpmers {
             let splitmer = kmer.to_u64() & mask;
-            asv_snpmer_index.entry(splitmer).or_insert_with(Vec::new).push((asv_idx, kmer));
+            asv_snpmer_index
+                .entry(splitmer)
+                .or_insert_with(Vec::new)
+                .push((asv_idx, kmer));
         }
     }
 
-    log::info!("Built SNPmer index with {} unique splitmers", asv_snpmer_index.len());
-    log::info!("Mapping {} reads to {} ASVs using k-mer comparison", twin_reads.len(), consensuses.len());
+    log::info!(
+        "Built SNPmer index with {} unique splitmers",
+        asv_snpmer_index.len()
+    );
+    log::info!(
+        "Mapping {} reads to {} ASVs using k-mer comparison",
+        twin_reads.len(),
+        consensuses.len()
+    );
 
     // Step 3: Map all reads to ASVs using k-mer comparison and collect equivalence classes
     let eq_classes = Mutex::new(HashMap::new());
@@ -1912,146 +2212,177 @@ pub fn refine_asv_depths_with_em(
     let ambig_read_map_count = Mutex::new(vec![0usize; consensuses.len()]);
     let num_map_leq_10nm = Mutex::new(vec![0usize; consensuses.len()]);
 
-    twin_reads.par_iter().enumerate().for_each(|(_read_idx, twin_read)| {
-        let read_snpmers = twin_read.snpmer_kmers();
-        let read_minimizers: FxHashSet<Kmer48> = twin_read.minimizer_kmers().into_iter().cloned().collect();
+    twin_reads
+        .par_iter()
+        .enumerate()
+        .for_each(|(_read_idx, twin_read)| {
+            let read_snpmers = twin_read.snpmer_kmers();
+            let read_minimizers: FxHashSet<Kmer48> =
+                twin_read.minimizer_kmers().into_iter().cloned().collect();
 
-        // Compare read against each ASV using SNPmers
-        let candidate_stats = find_compatible_candidates(&asv_snpmer_index, &read_snpmers, k);
+            // Compare read against each ASV using SNPmers
+            let candidate_stats = find_compatible_candidates(&asv_snpmer_index, &read_snpmers, k);
 
-        // For each candidate ASV, calculate ratio: mismatched_snpmers / matched_minimizers
-        let mut asv_scores: Vec<(usize, f64, usize, usize)> = Vec::new(); // (asv_idx, ratio, mismatches, minimizer_matches)
+            // For each candidate ASV, calculate ratio: mismatched_snpmers / matched_minimizers
+            let mut asv_scores: Vec<(usize, f64, usize, usize)> = Vec::new(); // (asv_idx, ratio, mismatches, minimizer_matches)
 
-        for (asv_idx, (_matches, mismatches)) in candidate_stats {
-            // Count matching minimizers between read and this ASV
-            let asv_minimizers: FxHashSet<Kmer48> = asv_twin_reads[asv_idx].minimizer_kmers().into_iter().cloned().collect();
-            let minimizer_matches = read_minimizers.intersection(&asv_minimizers).count();
+            for (asv_idx, (_matches, mismatches)) in candidate_stats {
+                // Count matching minimizers between read and this ASV
+                let asv_minimizers: FxHashSet<Kmer48> = asv_twin_reads[asv_idx]
+                    .minimizer_kmers()
+                    .into_iter()
+                    .cloned()
+                    .collect();
+                let minimizer_matches = read_minimizers.intersection(&asv_minimizers).count();
 
-            if minimizer_matches == 0 {
-                continue; // Skip if no minimizer overlap
+                if minimizer_matches == 0 {
+                    continue; // Skip if no minimizer overlap
+                }
+
+                if (minimizer_matches as f64
+                    / read_minimizers.len().min(asv_minimizers.len()) as f64)
+                    < (0.950f64).powi(k as i32)
+                {
+                    continue; // Skip if less than 10% minimizer overlap
+                }
+
+                // Calculate ratio: mismatched_snpmers / matched_minimizers
+                let ratio = mismatches as f64 / minimizer_matches as f64 / args.c as f64;
+
+                asv_scores.push((asv_idx, ratio, mismatches, minimizer_matches));
             }
 
-            if (minimizer_matches as f64 / read_minimizers.len().min(asv_minimizers.len()) as f64)
-                < (0.950f64).powi(k as i32) {
-                continue; // Skip if less than 10% minimizer overlap
+            // Find minimum ratio (best matches)
+            if asv_scores.is_empty() {
+                *filtered_reads_count.lock().unwrap() += 1;
+                return;
             }
 
-            // Calculate ratio: mismatched_snpmers / matched_minimizers
-            let ratio = mismatches as f64 / minimizer_matches as f64 / args.c as f64;
+            let min_ratio = asv_scores
+                .iter()
+                .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap())
+                .unwrap();
 
-            asv_scores.push((asv_idx, ratio, mismatches, minimizer_matches));
-        }
+            let min_mismatches = min_ratio.2;
+            let max_mini = min_ratio.3;
+            let min_ratio = min_ratio.1;
 
-        // Find minimum ratio (best matches)
-        if asv_scores.is_empty() {
-            *filtered_reads_count.lock().unwrap() += 1;
-            return;
-        }
+            // Filter by ratio threshold (0.005) and keep all ASVs with minimum ratio
+            let threshold = 0.0050;
+            let mut best_asv_indices: Vec<(usize, usize)> = asv_scores
+                .iter()
+                .filter(|(_, ratio, _, _)| *ratio <= threshold)
+                .map(|(asv_idx, _, mismatches, _)| (*asv_idx, *mismatches))
+                .collect();
 
-        let min_ratio = asv_scores.iter().min_by(|a, b| a.1.partial_cmp(&b.1).unwrap()).unwrap();
-
-        let min_mismatches = min_ratio.2;
-        let max_mini = min_ratio.3;
-        let min_ratio = min_ratio.1;
-
-        // Filter by ratio threshold (0.005) and keep all ASVs with minimum ratio
-        let threshold = 0.0050;
-        let mut best_asv_indices: Vec<(usize, usize)> = asv_scores.iter()
-            .filter(|(_, ratio, _, _)| *ratio <= threshold)
-            .map(|(asv_idx, _, mismatches, _)| (*asv_idx, *mismatches))
-            .collect();
-
-        if best_asv_indices.is_empty() {
-            *filtered_reads_count.lock().unwrap() += 1;
-            return;
-        }
-
-        // Among best ASVs, keep those with lowest mismatches
-        best_asv_indices.sort_by(|a, b| a.1.cmp(&b.1)); // Sort by mismatches
-        let lowest_mismatches = best_asv_indices[0].1;
-        best_asv_indices.retain(|(_, mismatches)| *mismatches == lowest_mismatches);
-
-        // For each best ASV, count number of kmer matches for tie-breaking
-        let mut best_alns: Vec<(usize, i32, usize)> = Vec::new(); // (asv_idx, nm, mismatches)
-        let seq_u8 : Vec<u8> = twin_read.dna_seq.iter().map(|x| x.to_char().to_ascii_uppercase() as u8).collect();
-        let aligner = Aligner::builder()
-            .lrhq()
-            .with_index_threads(1) // Use 1 thread per aligner since we parallelize over consensuses
-            .with_cigar()
-            .with_seq(&seq_u8)
-            .expect("Failed to create aligner");
-                
-        for (asv_idx, mismatches) in best_asv_indices.into_iter() {
-            let asv_tr = &asv_twin_reads[asv_idx];
-            let seq_u8_asv : Vec<u8> = asv_tr.dna_seq.iter().map(|x| x.to_char().to_ascii_uppercase() as u8).collect();
-            let alignment_result = aligner.map(&seq_u8_asv, true, false, None, None, None).unwrap();
-            if alignment_result.is_empty() {
-                continue;
+            if best_asv_indices.is_empty() {
+                *filtered_reads_count.lock().unwrap() += 1;
+                return;
             }
-            best_alns.push((asv_idx, alignment_result[0].alignment.as_ref().unwrap().nm, mismatches));
-        }
 
-        // Sort best alignments by number of mismatches (ascending)
-        best_alns.sort_by(|a, b| a.1.cmp(&b.1));
+            // Among best ASVs, keep those with lowest mismatches
+            best_asv_indices.sort_by(|a, b| a.1.cmp(&b.1)); // Sort by mismatches
+            let lowest_mismatches = best_asv_indices[0].1;
+            best_asv_indices.retain(|(_, mismatches)| *mismatches == lowest_mismatches);
 
-        let best_nm = best_alns.first().map(|x| x.1).unwrap_or(i32::MAX);
-        let mut best_asv_aln_indices: Vec<usize> = best_alns.iter()
-            .filter(|(_, nm, _)| *nm == best_nm)
-            .map(|(asv_idx, _, _)| *asv_idx)
-            .collect::<Vec<usize>>();
+            // For each best ASV, count number of kmer matches for tie-breaking
+            let mut best_alns: Vec<(usize, i32, usize)> = Vec::new(); // (asv_idx, nm, mismatches)
+            let seq_u8: Vec<u8> = twin_read
+                .dna_seq
+                .iter()
+                .map(|x| x.to_char().to_ascii_uppercase() as u8)
+                .collect();
+            let aligner = Aligner::builder()
+                .lrhq()
+                .with_index_threads(1) // Use 1 thread per aligner since we parallelize over consensuses
+                .with_cigar()
+                .with_seq(&seq_u8)
+                .expect("Failed to create aligner");
 
-        // Map to file
-        {
-            let mut mapping_file_writer = mapping_file_writer.lock().unwrap();
-            for (asv_idx, mini_matches, mismatches) in best_alns.iter().take(5) {
-                writeln!(
-                    mapping_file_writer,
-                    "{}\tdebug_id:{}\t{}\t{}",
-                    twin_read.id,
-                    consensuses[*asv_idx].id,
+            for (asv_idx, mismatches) in best_asv_indices.into_iter() {
+                let asv_tr = &asv_twin_reads[asv_idx];
+                let seq_u8_asv: Vec<u8> = asv_tr
+                    .dna_seq
+                    .iter()
+                    .map(|x| x.to_char().to_ascii_uppercase() as u8)
+                    .collect();
+                let alignment_result = aligner
+                    .map(&seq_u8_asv, true, false, None, None, None)
+                    .unwrap();
+                if alignment_result.is_empty() {
+                    continue;
+                }
+                best_alns.push((
+                    asv_idx,
+                    alignment_result[0].alignment.as_ref().unwrap().nm,
                     mismatches,
-                    mini_matches
-                ).expect("Failed to write to read_to_asv_mappings.tsv");
+                ));
             }
-        }
 
-        // Only keep reads that have at least one good mapping
-        if !best_asv_aln_indices.is_empty() {
-            // Sort to ensure consistent equivalence class keys
-            best_asv_aln_indices.sort();
+            // Sort best alignments by number of mismatches (ascending)
+            best_alns.sort_by(|a, b| a.1.cmp(&b.1));
 
-            let eq_class = EquivalenceClass {
-                asv_indices:best_asv_aln_indices,
-            };
+            let best_nm = best_alns.first().map(|x| x.1).unwrap_or(i32::MAX);
+            let mut best_asv_aln_indices: Vec<usize> = best_alns
+                .iter()
+                .filter(|(_, nm, _)| *nm == best_nm)
+                .map(|(asv_idx, _, _)| *asv_idx)
+                .collect::<Vec<usize>>();
 
-            if eq_class.asv_indices.len() == 1{
-                let asv_idx = eq_class.asv_indices[0];
-                let mut unambig_counts = unambig_read_map_count.lock().unwrap();
-                unambig_counts[asv_idx] += 1;
-            }
-            else{
-                for &asv_idx in eq_class.asv_indices.iter(){
-                    let mut ambig_counts = ambig_read_map_count.lock().unwrap();
-                    ambig_counts[asv_idx] += 1;
+            // Map to file
+            {
+                let mut mapping_file_writer = mapping_file_writer.lock().unwrap();
+                for (asv_idx, mini_matches, mismatches) in best_alns.iter().take(5) {
+                    writeln!(
+                        mapping_file_writer,
+                        "{}\tdebug_id:{}\t{}\t{}",
+                        twin_read.id, consensuses[*asv_idx].id, mismatches, mini_matches
+                    )
+                    .expect("Failed to write to read_to_asv_mappings.tsv");
                 }
             }
 
-            if best_nm <= 10 {
-                for &asv_idx in eq_class.asv_indices.iter(){
-                    let mut leq10nm_counts = num_map_leq_10nm.lock().unwrap();
-                    leq10nm_counts[asv_idx] += 1;
-                }
-            }
+            // Only keep reads that have at least one good mapping
+            if !best_asv_aln_indices.is_empty() {
+                // Sort to ensure consistent equivalence class keys
+                best_asv_aln_indices.sort();
 
-            // Add to equivalence class with count
-            let mut eq_map = eq_classes.lock().unwrap();
-            *eq_map.entry(eq_class).or_insert(0) += 1;
-            *total_assigned_reads.lock().unwrap() += 1;
-        } else {
-            log::trace!("Read filtered out due to high ratio mappings: ratio {:.4} mismatch {} mini {}", min_ratio, min_mismatches, max_mini);
-            *filtered_reads_count.lock().unwrap() += 1;
-        }
-    });
+                let eq_class = EquivalenceClass {
+                    asv_indices: best_asv_aln_indices,
+                };
+
+                if eq_class.asv_indices.len() == 1 {
+                    let asv_idx = eq_class.asv_indices[0];
+                    let mut unambig_counts = unambig_read_map_count.lock().unwrap();
+                    unambig_counts[asv_idx] += 1;
+                } else {
+                    for &asv_idx in eq_class.asv_indices.iter() {
+                        let mut ambig_counts = ambig_read_map_count.lock().unwrap();
+                        ambig_counts[asv_idx] += 1;
+                    }
+                }
+
+                if best_nm <= 10 {
+                    for &asv_idx in eq_class.asv_indices.iter() {
+                        let mut leq10nm_counts = num_map_leq_10nm.lock().unwrap();
+                        leq10nm_counts[asv_idx] += 1;
+                    }
+                }
+
+                // Add to equivalence class with count
+                let mut eq_map = eq_classes.lock().unwrap();
+                *eq_map.entry(eq_class).or_insert(0) += 1;
+                *total_assigned_reads.lock().unwrap() += 1;
+            } else {
+                log::trace!(
+                    "Read filtered out due to high ratio mappings: ratio {:.4} mismatch {} mini {}",
+                    min_ratio,
+                    min_mismatches,
+                    max_mini
+                );
+                *filtered_reads_count.lock().unwrap() += 1;
+            }
+        });
 
     let eq_classes = sorted_equivalence_classes(eq_classes.into_inner().unwrap());
     let filtered_reads = filtered_reads_count.into_inner().unwrap();
@@ -2059,7 +2390,10 @@ pub fn refine_asv_depths_with_em(
 
     log::info!("Filtered {} reads with ratio > 0.005", filtered_reads);
     log::info!("Total assigned reads: {}", total_assigned);
-    log::info!("Total percentage assigned: {:.2}%", (total_assigned as f64 / (total_assigned + filtered_reads) as f64) * 100.0);
+    log::info!(
+        "Total percentage assigned: {:.2}%",
+        (total_assigned as f64 / (total_assigned + filtered_reads) as f64) * 100.0
+    );
     log::info!("Number of unique equivalence classes: {}", eq_classes.len());
 
     let unambig_read_map_count = unambig_read_map_count.into_inner().unwrap();
@@ -2075,7 +2409,11 @@ pub fn refine_asv_depths_with_em(
     //debug equiv classes
 
     for (eq_class, count) in &eq_classes {
-        log::trace!("Equivalence class: ASVs {:?}, Count {}", eq_class.asv_indices, count);
+        log::trace!(
+            "Equivalence class: ASVs {:?}, Count {}",
+            eq_class.asv_indices,
+            count
+        );
     }
 
     if eq_classes.is_empty() {
@@ -2088,7 +2426,10 @@ pub fn refine_asv_depths_with_em(
     let mut asv_abundances = vec![1.0 / num_asvs as f64; num_asvs];
     let convergence_threshold = 0.01 / total_assigned as f64;
 
-    log::info!("Running EM algorithm with convergence threshold: {:.6e}", convergence_threshold);
+    log::info!(
+        "Running EM algorithm with convergence threshold: {:.6e}",
+        convergence_threshold
+    );
 
     let mut iteration = 0;
     const MAX_ITERATIONS: usize = 10000;
@@ -2099,7 +2440,9 @@ pub fn refine_asv_depths_with_em(
 
         // E-step + M-step: distribute reads proportionally based on current abundances
         for (eq_class, count) in &eq_classes {
-            let denominator: f64 = eq_class.asv_indices.iter()
+            let denominator: f64 = eq_class
+                .asv_indices
+                .iter()
                 .map(|&asv_idx| asv_abundances[asv_idx])
                 .sum();
 
@@ -2120,7 +2463,8 @@ pub fn refine_asv_depths_with_em(
         }
 
         // Check convergence
-        let max_change = asv_abundances.iter()
+        let max_change = asv_abundances
+            .iter()
             .zip(new_asv_abundances.iter())
             .map(|(old, new)| (old - new).abs())
             .fold(0.0, f64::max);
@@ -2128,7 +2472,11 @@ pub fn refine_asv_depths_with_em(
         asv_abundances = new_asv_abundances;
 
         if max_change < convergence_threshold || iteration >= MAX_ITERATIONS {
-            log::info!("EM converged after {} iterations (max change: {:.6e})", iteration, max_change);
+            log::info!(
+                "EM converged after {} iterations (max change: {:.6e})",
+                iteration,
+                max_change
+            );
             break;
         }
 
@@ -2147,10 +2495,14 @@ pub fn refine_asv_depths_with_em(
                 asv_idx, consensus.depth, new_depth);
             consensus.depth = new_depth;
             // consensus.depth = 0; // Force removal
-        }
-        else{
-            log::debug!("ASV {}: Original depth = {}, EM abundance = {:.6}, New depth = {}",
-                asv_idx, consensus.depth, em_abundance, new_depth);
+        } else {
+            log::debug!(
+                "ASV {}: Original depth = {}, EM abundance = {:.6}, New depth = {}",
+                asv_idx,
+                consensus.depth,
+                em_abundance,
+                new_depth
+            );
             consensus.depth = new_depth;
         }
     }
@@ -2161,10 +2513,16 @@ pub fn refine_asv_depths_with_em(
     let filtered_count = original_count - consensuses.len();
 
     if filtered_count > 0 {
-        log::info!("Filtered {} ASVs with zero depth after EM refinement", filtered_count);
+        log::info!(
+            "Filtered {} ASVs with zero depth after EM refinement",
+            filtered_count
+        );
     }
 
-    log::info!("EM refinement complete: {} ASVs remaining", consensuses.len());
+    log::info!(
+        "EM refinement complete: {} ASVs remaining",
+        consensuses.len()
+    );
 }
 
 /// Compute per-sample depths for each ASV using the same SNPmer+EM machinery as the global EM.
@@ -2186,12 +2544,23 @@ pub fn compute_per_sample_depths(
     }
 
     if args.low_polymorphism {
-        return compute_per_sample_depths_minimap2(twin_reads, n_samples, consensuses, args, asv_fasta_path);
+        return compute_per_sample_depths_minimap2(
+            twin_reads,
+            n_samples,
+            consensuses,
+            args,
+            asv_fasta_path,
+        );
     }
 
     // Build ASV twin reads and SNPmer index once, shared across all sample iterations.
     let asv_twin_reads = kmer_comp::twin_reads_from_fasta(
-        asv_fasta_path, kmer_info, args.kmer_size, args.c, args.blockmer_length, args.minimum_base_quality,
+        asv_fasta_path,
+        kmer_info,
+        args.kmer_size,
+        args.c,
+        args.blockmer_length,
+        args.minimum_base_quality,
     );
     let k = args.kmer_size;
     let mask = !(3u64 << (k - 1));
@@ -2199,7 +2568,10 @@ pub fn compute_per_sample_depths(
     for (asv_idx, asv_read) in asv_twin_reads.iter().enumerate() {
         for (_pos, kmer) in asv_read.snpmers_vec() {
             let splitmer = kmer.to_u64() & mask;
-            asv_snpmer_index.entry(splitmer).or_insert_with(Vec::new).push((asv_idx, kmer));
+            asv_snpmer_index
+                .entry(splitmer)
+                .or_insert_with(Vec::new)
+                .push((asv_idx, kmer));
         }
     }
 
@@ -2208,7 +2580,10 @@ pub fn compute_per_sample_depths(
 
     for sample_k in 0..n_samples {
         let sample_k_u32 = sample_k as u32;
-        let n_reads_this_sample = twin_reads.iter().filter(|r| r.file_idx == sample_k_u32).count();
+        let n_reads_this_sample = twin_reads
+            .iter()
+            .filter(|r| r.file_idx == sample_k_u32)
+            .count();
         if n_reads_this_sample == 0 {
             log::info!("Sample {}: no reads found", sample_k);
             continue;
@@ -2221,21 +2596,34 @@ pub fn compute_per_sample_depths(
         let asv_twin_reads_ref = Arc::clone(&asv_twin_reads);
         let asv_snpmer_index_ref = Arc::clone(&asv_snpmer_index);
 
-        twin_reads.par_iter()
+        twin_reads
+            .par_iter()
             .filter(|r| r.file_idx == sample_k_u32)
             .for_each(|twin_read| {
                 let read_snpmers = twin_read.snpmer_kmers();
-                let read_minimizers: FxHashSet<Kmer48> = twin_read.minimizer_kmers().into_iter().cloned().collect();
+                let read_minimizers: FxHashSet<Kmer48> =
+                    twin_read.minimizer_kmers().into_iter().cloned().collect();
 
-                let candidate_stats = find_compatible_candidates(&asv_snpmer_index_ref, &read_snpmers, k);
+                let candidate_stats =
+                    find_compatible_candidates(&asv_snpmer_index_ref, &read_snpmers, k);
 
                 let mut asv_scores: Vec<(usize, f64, usize, usize)> = Vec::new();
                 for (asv_idx, (_matches, mismatches)) in candidate_stats {
-                    let asv_minimizers: FxHashSet<Kmer48> = asv_twin_reads_ref[asv_idx].minimizer_kmers().into_iter().cloned().collect();
+                    let asv_minimizers: FxHashSet<Kmer48> = asv_twin_reads_ref[asv_idx]
+                        .minimizer_kmers()
+                        .into_iter()
+                        .cloned()
+                        .collect();
                     let minimizer_matches = read_minimizers.intersection(&asv_minimizers).count();
-                    if minimizer_matches == 0 { continue; }
-                    if (minimizer_matches as f64 / read_minimizers.len().min(asv_minimizers.len()) as f64)
-                        < (0.950f64).powi(k as i32) { continue; }
+                    if minimizer_matches == 0 {
+                        continue;
+                    }
+                    if (minimizer_matches as f64
+                        / read_minimizers.len().min(asv_minimizers.len()) as f64)
+                        < (0.950f64).powi(k as i32)
+                    {
+                        continue;
+                    }
                     let ratio = mismatches as f64 / minimizer_matches as f64 / args.c as f64;
                     asv_scores.push((asv_idx, ratio, mismatches, minimizer_matches));
                 }
@@ -2246,7 +2634,8 @@ pub fn compute_per_sample_depths(
                 }
 
                 let threshold = 0.0050;
-                let mut best_asv_indices: Vec<(usize, usize)> = asv_scores.iter()
+                let mut best_asv_indices: Vec<(usize, usize)> = asv_scores
+                    .iter()
                     .filter(|(_, ratio, _, _)| *ratio <= threshold)
                     .map(|(asv_idx, _, mismatches, _)| (*asv_idx, *mismatches))
                     .collect();
@@ -2260,7 +2649,11 @@ pub fn compute_per_sample_depths(
                 let lowest_mismatches = best_asv_indices[0].1;
                 best_asv_indices.retain(|(_, m)| *m == lowest_mismatches);
 
-                let seq_u8: Vec<u8> = twin_read.dna_seq.iter().map(|x| x.to_char().to_ascii_uppercase() as u8).collect();
+                let seq_u8: Vec<u8> = twin_read
+                    .dna_seq
+                    .iter()
+                    .map(|x| x.to_char().to_ascii_uppercase() as u8)
+                    .collect();
                 let aligner = Aligner::builder()
                     .lrhq()
                     .with_index_threads(1)
@@ -2271,9 +2664,17 @@ pub fn compute_per_sample_depths(
                 let mut best_alns: Vec<(usize, i32)> = Vec::new();
                 for (asv_idx, _) in best_asv_indices {
                     let asv_tr = &asv_twin_reads_ref[asv_idx];
-                    let seq_u8_asv: Vec<u8> = asv_tr.dna_seq.iter().map(|x| x.to_char().to_ascii_uppercase() as u8).collect();
-                    let aln = aligner.map(&seq_u8_asv, true, false, None, None, None).unwrap();
-                    if aln.is_empty() { continue; }
+                    let seq_u8_asv: Vec<u8> = asv_tr
+                        .dna_seq
+                        .iter()
+                        .map(|x| x.to_char().to_ascii_uppercase() as u8)
+                        .collect();
+                    let aln = aligner
+                        .map(&seq_u8_asv, true, false, None, None, None)
+                        .unwrap();
+                    if aln.is_empty() {
+                        continue;
+                    }
                     best_alns.push((asv_idx, aln[0].alignment.as_ref().unwrap().nm));
                 }
 
@@ -2284,14 +2685,17 @@ pub fn compute_per_sample_depths(
 
                 best_alns.sort_by(|a, b| a.1.cmp(&b.1));
                 let best_nm = best_alns[0].1;
-                let mut best_asv_aln_indices: Vec<usize> = best_alns.iter()
+                let mut best_asv_aln_indices: Vec<usize> = best_alns
+                    .iter()
                     .filter(|(_, nm)| *nm == best_nm)
                     .map(|(idx, _)| *idx)
                     .collect();
                 best_asv_aln_indices.sort();
 
                 if !best_asv_aln_indices.is_empty() {
-                    let eq_class = EquivalenceClass { asv_indices: best_asv_aln_indices };
+                    let eq_class = EquivalenceClass {
+                        asv_indices: best_asv_aln_indices,
+                    };
                     *eq_classes.lock().unwrap().entry(eq_class).or_insert(0) += 1;
                     *total_assigned.lock().unwrap() += 1;
                 } else {
@@ -2303,7 +2707,12 @@ pub fn compute_per_sample_depths(
         let total_assigned = total_assigned.into_inner().unwrap();
         let filtered = filtered_count.into_inner().unwrap();
 
-        log::info!("Sample {}: {} reads assigned, {} filtered", sample_k, total_assigned, filtered);
+        log::info!(
+            "Sample {}: {} reads assigned, {} filtered",
+            sample_k,
+            total_assigned,
+            filtered
+        );
 
         if eq_classes.is_empty() || total_assigned == 0 {
             continue;
@@ -2318,25 +2727,38 @@ pub fn compute_per_sample_depths(
             iteration += 1;
             let mut new_abundances = vec![0.0f64; n_asvs];
             for (eq_class, count) in &eq_classes {
-                let denom: f64 = eq_class.asv_indices.iter().map(|&i| asv_abundances[i]).sum();
+                let denom: f64 = eq_class
+                    .asv_indices
+                    .iter()
+                    .map(|&i| asv_abundances[i])
+                    .sum();
                 if denom > 0.0 {
                     for &asv_idx in &eq_class.asv_indices {
-                        new_abundances[asv_idx] += (*count as f64) * asv_abundances[asv_idx] / denom;
+                        new_abundances[asv_idx] +=
+                            (*count as f64) * asv_abundances[asv_idx] / denom;
                     }
                 }
             }
             let total: f64 = new_abundances.iter().sum();
             if total > 0.0 {
-                for a in new_abundances.iter_mut() { *a /= total_assigned as f64; }
+                for a in new_abundances.iter_mut() {
+                    *a /= total_assigned as f64;
+                }
             }
-            let max_change = asv_abundances.iter().zip(new_abundances.iter())
-                .map(|(o, n)| (o - n).abs()).fold(0.0, f64::max);
+            let max_change = asv_abundances
+                .iter()
+                .zip(new_abundances.iter())
+                .map(|(o, n)| (o - n).abs())
+                .fold(0.0, f64::max);
             asv_abundances = new_abundances;
-            if max_change < convergence_threshold || iteration >= MAX_ITERATIONS { break; }
+            if max_change < convergence_threshold || iteration >= MAX_ITERATIONS {
+                break;
+            }
         }
 
         for asv_idx in 0..n_asvs {
-            result[asv_idx][sample_k] = (asv_abundances[asv_idx] * total_assigned as f64).round() as usize;
+            result[asv_idx][sample_k] =
+                (asv_abundances[asv_idx] * total_assigned as f64).round() as usize;
         }
     }
 
@@ -2367,13 +2789,21 @@ fn compute_per_sample_depths_minimap2(
         let filtered_count = Mutex::new(0usize);
         let total_assigned = Mutex::new(0usize);
 
-        twin_reads.par_iter()
+        twin_reads
+            .par_iter()
             .filter(|r| r.file_idx == sample_k_u32)
             .for_each(|twin_read| {
-                let seq: Vec<u8> = twin_read.dna_seq.iter().map(|x| x.to_char().to_ascii_uppercase() as u8).collect();
-                let mappings = aligner.map(&seq, true, false, None, None, None).unwrap_or_default();
+                let seq: Vec<u8> = twin_read
+                    .dna_seq
+                    .iter()
+                    .map(|x| x.to_char().to_ascii_uppercase() as u8)
+                    .collect();
+                let mappings = aligner
+                    .map(&seq, true, false, None, None, None)
+                    .unwrap_or_default();
 
-                let valid: Vec<_> = mappings.iter()
+                let valid: Vec<_> = mappings
+                    .iter()
                     .filter(|m| m.mapq > 0 && m.alignment.is_some())
                     .collect();
 
@@ -2382,15 +2812,22 @@ fn compute_per_sample_depths_minimap2(
                     return;
                 }
 
-                let best_nm = valid.iter().map(|m| m.alignment.as_ref().unwrap().nm).min().unwrap();
-                let mut best_asv_indices: Vec<usize> = valid.iter()
+                let best_nm = valid
+                    .iter()
+                    .map(|m| m.alignment.as_ref().unwrap().nm)
+                    .min()
+                    .unwrap();
+                let mut best_asv_indices: Vec<usize> = valid
+                    .iter()
                     .filter(|m| m.alignment.as_ref().unwrap().nm == best_nm)
                     .map(|m| m.target_id as usize)
                     .collect();
                 best_asv_indices.sort();
                 best_asv_indices.dedup();
 
-                let eq_class = EquivalenceClass { asv_indices: best_asv_indices };
+                let eq_class = EquivalenceClass {
+                    asv_indices: best_asv_indices,
+                };
                 *eq_classes.lock().unwrap().entry(eq_class).or_insert(0) += 1;
                 *total_assigned.lock().unwrap() += 1;
             });
@@ -2399,7 +2836,12 @@ fn compute_per_sample_depths_minimap2(
         let total_assigned = total_assigned.into_inner().unwrap();
         let filtered = filtered_count.into_inner().unwrap();
 
-        log::info!("Sample {} (minimap2): {} reads assigned, {} filtered", sample_k, total_assigned, filtered);
+        log::info!(
+            "Sample {} (minimap2): {} reads assigned, {} filtered",
+            sample_k,
+            total_assigned,
+            filtered
+        );
 
         if eq_classes.is_empty() || total_assigned == 0 {
             continue;
@@ -2413,25 +2855,38 @@ fn compute_per_sample_depths_minimap2(
             iteration += 1;
             let mut new_abundances = vec![0.0f64; n_asvs];
             for (eq_class, count) in &eq_classes {
-                let denom: f64 = eq_class.asv_indices.iter().map(|&i| asv_abundances[i]).sum();
+                let denom: f64 = eq_class
+                    .asv_indices
+                    .iter()
+                    .map(|&i| asv_abundances[i])
+                    .sum();
                 if denom > 0.0 {
                     for &asv_idx in &eq_class.asv_indices {
-                        new_abundances[asv_idx] += (*count as f64) * asv_abundances[asv_idx] / denom;
+                        new_abundances[asv_idx] +=
+                            (*count as f64) * asv_abundances[asv_idx] / denom;
                     }
                 }
             }
             let total: f64 = new_abundances.iter().sum();
             if total > 0.0 {
-                for a in new_abundances.iter_mut() { *a /= total_assigned as f64; }
+                for a in new_abundances.iter_mut() {
+                    *a /= total_assigned as f64;
+                }
             }
-            let max_change = asv_abundances.iter().zip(new_abundances.iter())
-                .map(|(o, n)| (o - n).abs()).fold(0.0, f64::max);
+            let max_change = asv_abundances
+                .iter()
+                .zip(new_abundances.iter())
+                .map(|(o, n)| (o - n).abs())
+                .fold(0.0, f64::max);
             asv_abundances = new_abundances;
-            if max_change < convergence_threshold || iteration >= MAX_ITERATIONS { break; }
+            if max_change < convergence_threshold || iteration >= MAX_ITERATIONS {
+                break;
+            }
         }
 
         for asv_idx in 0..n_asvs {
-            result[asv_idx][sample_k] = (asv_abundances[asv_idx] * total_assigned as f64).round() as usize;
+            result[asv_idx][sample_k] =
+                (asv_abundances[asv_idx] * total_assigned as f64).round() as usize;
         }
     }
 
