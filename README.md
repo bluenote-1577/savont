@@ -18,23 +18,12 @@ Savont differs from mapping-based approaches (e.g. Emu or ONT's epi2me workflow)
 > Savont is optimized for long reads with >98% accuracy. ONT's R10.4 reads with SUP basecalling or PacBio HiFi are preferred.
 > For lower quality reads (e.g. R9.4 ONT data) savont may **not** be useful.
 
-<p align="center">
-    <img width="90%" alt="github-diagram" src="https://github.com/user-attachments/assets/c0d9e356-ee1d-4d60-a217-c050e5abd0dc" />
-</p>
-
-## Results
-
 > [!tip]
 > [The savont preprint](https://www.biorxiv.org/content/10.64898/2026.05.26.727271v1) is now out! Please see the preprint for results and methodological details. 
 
-<p align="center">
-<img width="90%" alt="image" src="https://github.com/user-attachments/assets/e4da4032-e080-48a5-b04a-e8bbd2ad1976" />
-    <p align="center"><i>ONT and HiFi results on 8-species community for full-length 16S sequences.</i></p>
-</p>
 
 <p align="center">
-<img width="90%" alt="image" src="https://github.com/user-attachments/assets/0ce3f9d9-3040-4e87-aa35-f798767acdc7" />
-    <p align="center"><i>Diversity and ASV metrics on complex full-length ONT 16S amplicons.</i> </p>
+    <img width="90%" alt="github-diagram" src="https://github.com/user-attachments/assets/c0d9e356-ee1d-4d60-a217-c050e5abd0dc" />
 </p>
 
 
@@ -153,7 +142,7 @@ The `savont asv` command produces:
 Savont can also classify ASVs and generate a taxonomic profile with abundances. Savont supports two classification approaches:
 
 - **`savont classify`** — minimap2 alignment against database with species- and genus-level output (better for species level). Uses identity thresholds for taxonomic assignment (thresholds from [Yarza et al.](https://www.nature.com/articles/nrmicro3330))
-- **`savont sintax`** — SINTAX k-mer bootstrap; genus-level only (better for unknown taxa)
+- **`savont sintax`** — SINTAX k-mer classification via bootstrap from [Edgar et al.](https://www.biorxiv.org/content/10.1101/074161v1); genus-level only (better for unknown taxa)
 
 ### Step 1: Download a reference database
 
