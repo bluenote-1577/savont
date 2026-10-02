@@ -61,7 +61,7 @@ mamba install -c bioconda savont
 
 #### Step 1: get ASVs from primer/adapter trimmed reads
 
-You can either run savont in single sample mode or pool samples together. See [documentation on multi-sample profiling](#multi-sample-savont-workflow).
+You can either run savont in single-sample mode or pool samples together. See [documentation on multi-sample profiling](#multi-sample-savont-workflow).
 
 ```sh
 # generate 16S ASVs for ONT / HiFi after cutadapt
@@ -70,6 +70,8 @@ savont asv 16s_full-length_trimmed.fastq.gz -o savont-out -t 20 (optional: --hif
 # OR pool samples, get shared ASVs, quantify each sample independently
 savont asv --pooled-samples sample1.fq.gz sample2.fq.gz  ...
 ```
+
+- ASVs will be available in `savont-out/final_asvs.fasta`. 
 
 #### Step 2: download databases and classify ASVs
 
@@ -81,7 +83,11 @@ savont download --location /path/databases --dbs greengenes2-2024.09 emu-1 silva
 savont classify -i savont-out -d /path/databases/emu-1 -t 20
 ```
 
-#### Step 3: export results to QIIME2-parseable formats (optional)
+- Taxonomic profiles and ASV classifications are available in `savont-out/`. 
+
+#### Step 3: export results to [QIIME2](https://qiime2.org/)-parseable formats (optional)
+
+This optional step outputs merged tables in [QIIME2](https://qiime2.org/)-compatible formats for visualization. 
 
 ```sh
 # export a single run to QIIME2-compatible outputs
@@ -125,7 +131,7 @@ You can either
 
 2. Or, you can pool samples through `savont asv --pooled-samples sample1.fq sample2.fq ...`. This runs ASV detection on the concatenation of all samples, but sample-by-sample abundance quantification.
 
-Pooling may allow recovery of low abundance ASVs and prevent cross-sample ASV splitting ([see here](https://github.com/bluenote-1577/savont/issues/2)). However, pooling is more computationally expensive, both in terms of memory and speed. 
+Pooling may allow recovery of low-abundance ASVs and prevent cross-sample ASV splitting ([see here](https://github.com/bluenote-1577/savont/issues/2)). However, pooling is more computationally expensive, both in terms of memory and speed. 
 
 
 ### ASV output
@@ -135,7 +141,7 @@ The `savont asv` command produces:
 1. **final_asvs.fasta** - Final ASV sequences; headers use `final_asv_N_depth_M` (N = rank by depth, M = EM-refined read depth)
 2. **feature-table.tsv** - QIIME2-compatible feature table (ASV × sample read counts); row IDs match `final_asv_N_depth_M` from the FASTA
 3. **final_assignments.tsv** - Read-to-ASV assignment table: one row per read (those passing length/quality filters), columns `read_id`, `asv` (`final_asv_N` or `unassigned`), `alignment_identity`, `est_read_identity`. Use this to find which reads belong to which ASV.
-4. **temp/** - Intermediate files including `final_clusters.tsv` (Stage 5 cluster membership) and `read_to_asv_mappings.tsv` (raw EM alignment output)
+4. **temp/** - Intermediate files including `final_clusters.tsv` (raw cluster membership) and `read_to_asv_mappings.tsv` (raw EM alignment output)
 
 ## Taxonomic profiling against a reference database
 
@@ -143,6 +149,8 @@ Savont can also classify ASVs and generate a taxonomic profile with abundances. 
 
 - **`savont classify`** — minimap2 alignment against database with species- and genus-level output (better for species level). Uses identity thresholds for taxonomic assignment (thresholds from [Yarza et al.](https://www.nature.com/articles/nrmicro3330))
 - **`savont sintax`** — SINTAX k-mer classification via bootstrap from [Edgar et al.](https://www.biorxiv.org/content/10.1101/074161v1); genus-level only (better for unknown taxa)
+
+`classify` works better for species / strain level assignments, whereas `sintax` works better for higher taxonomic assignments when your microbiome is not well captured by a reference database. 
 
 ### Step 1: Download a reference database
 
