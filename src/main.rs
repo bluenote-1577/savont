@@ -80,6 +80,7 @@ fn run_cluster(args: &cli::ClusterArgs, cli_args: &cli::Cli) {
         log::warn!("Auto-enabling --low-polymorphism: >75% of reads have no SNPmers. SNPmer clustering and index will be skipped.");
         args.low_polymorphism = true;
     }
+    log_memory_usage(true, "STAGE 1.5 DONE: Loaded twin reads");
     let args = args; // make immutable after setup
 
     log::info!("=== STAGE 2: Clustering reads by k-mers ===");
@@ -92,17 +93,48 @@ fn run_cluster(args: &cli::ClusterArgs, cli_args: &cli::Cli) {
 
     log::info!("=== STAGE 4: Generating consensus sequences and analyzing pileupes ===");
     let mut consensuses = alignment::align_and_consensus(&twin_reads, clusters, &args, &temp_dir);
-    // Generate pileups for quality estimation
-    let pileups = alignment::generate_consensus_pileups(&twin_reads, &mut consensuses, &args);
 
-    // Estimate quality error rates from top 10% of clusters
-    let quality_error_map = alignment::estimate_quality_error_rates(&pileups, &consensuses, 0.1);
+    // Pileups are generated in batches rather than all at once. One pileup costs roughly
+    // hpc_len * min(depth, MAX_SEQS_CONSENSUS) * 32 bytes (a `bases` entry per aligned
+    // read per position), so holding one per cluster made peak memory scale with the
+    // number of clusters — tens of GB for a diverse community with thousands of ASVs.
+    // Batching bounds that without reducing parallelism: every batch is still processed
+    // across all threads, and the batch floor keeps all threads fed.
+    let batches = alignment::plan_pileup_batches(&consensuses, &args);
+    log::info!(
+        "Generating pileups for {} clusters in {} batch(es)",
+        consensuses.len(),
+        batches.len()
+    );
 
-    // Analyze pileup consensuses
-    let mut low_qual_consensus = alignment::analyze_pileup_consensuses(
-        pileups,
+    // Pass 1: error rates only need the deepest 10% of clusters, so build just those.
+    let top_indices = alignment::top_cluster_indices(&consensuses, 0.1);
+    let quality_error_map = {
+        let top_pileups = alignment::generate_consensus_pileups(
+            &twin_reads,
+            &mut consensuses,
+            &args,
+            &top_indices,
+        );
+        alignment::estimate_quality_error_rates(&top_pileups)
+    }; // top_pileups dropped here
+
+    // Pass 2: analyze every cluster, one batch at a time. Regenerating the top 10% is
+    // safe — pileup contents depend only on the consensus sequence and its reads.
+    for batch in &batches {
+        let batch_pileups =
+            alignment::generate_consensus_pileups(&twin_reads, &mut consensuses, &args, batch);
+        alignment::analyze_pileup_consensuses(
+            batch_pileups,
+            batch,
+            &mut consensuses,
+            &quality_error_map,
+            &args,
+        );
+    }
+
+    let mut low_qual_consensus = alignment::collect_low_quality_consensuses(
         &mut consensuses,
-        &quality_error_map,
         &twin_reads,
         &args,
         &temp_dir,

@@ -46,6 +46,20 @@ impl Pileup {
         }
     }
 
+    /// Same as `new`, but preallocates `bases` for the expected number of aligned
+    /// reads. `bases` is pushed to once per aligned read per position, so without
+    /// this it reallocates ~log2(depth) times per position, which dominates
+    /// allocator churn when many threads build pileups concurrently.
+    pub fn with_capacity(ref_pos: usize, ref_base: u8, ref_hp_length: u8, cap: usize) -> Self {
+        Self {
+            ref_pos,
+            ref_base,
+            ref_hp_length,
+            bases: Vec::with_capacity(cap),
+            alt_posterior: None,
+        }
+    }
+
     pub fn add_base(&mut self, base: u8, quality: u8, hp_length: u8) {
         self.bases.push(PileupBase::Base(base, quality, hp_length));
     }
@@ -448,41 +462,99 @@ pub fn align_and_consensus(
 
 /// Generate pileups for consensus sequences by aligning reads back to them
 /// Aligns up to max_seqs_consensus reads per cluster and builds position-wise pileups
+/// Approximate heap cost of one cluster's pileup, in bytes.
+///
+/// Each position holds a `bases` entry per aligned read, and `PileupBase` is sized by
+/// its largest variant (`Insertion(Vec<_>)`), so ~32 bytes per entry; the `Pileup`
+/// structs themselves add ~56 bytes per position.
+fn estimated_pileup_bytes(consensus: &ConsensusSequence) -> usize {
+    let positions = consensus.sequence.len();
+    let depth = consensus.cluster.len().min(MAX_SEQS_CONSENSUS);
+    positions * depth * 32 + positions * 56
+}
+
+/// Groups all cluster indices into batches whose combined pileups stay within a memory
+/// budget, so peak usage does not grow with the number of clusters.
+///
+/// Each batch is still processed in parallel across all threads, so this costs no
+/// parallelism as long as a batch holds at least as many clusters as there are threads;
+/// that floor is enforced even if it means exceeding the budget (a single cluster's
+/// pileup is unavoidable, and the floor keeps all threads busy).
+pub fn plan_pileup_batches(consensuses: &[ConsensusSequence], args: &Cli) -> Vec<Vec<usize>> {
+    const PILEUP_BUDGET_BYTES: usize = 2 * 1024 * 1024 * 1024; // 2 GiB of pileups in flight
+    let min_batch = args.threads.max(1);
+
+    let mut batches: Vec<Vec<usize>> = Vec::new();
+    let mut current: Vec<usize> = Vec::new();
+    let mut current_bytes = 0usize;
+
+    for (idx, consensus) in consensuses.iter().enumerate() {
+        let cost = estimated_pileup_bytes(consensus);
+        if !current.is_empty()
+            && current.len() >= min_batch
+            && current_bytes + cost > PILEUP_BUDGET_BYTES
+        {
+            batches.push(std::mem::take(&mut current));
+            current_bytes = 0;
+        }
+        current.push(idx);
+        current_bytes += cost;
+    }
+    if !current.is_empty() {
+        batches.push(current);
+    }
+    batches
+}
+
+/// Builds pileups for the clusters named in `cluster_indices` (global indices into
+/// `consensuses`). The returned Vec is ordered to match `cluster_indices`, not
+/// `consensuses`. Callers process clusters in batches so that only a bounded number
+/// of pileups are alive at once; a pileup costs
+/// `hpc_len * min(depth, MAX_SEQS_CONSENSUS) * ~32` bytes, so materializing all of
+/// them at once is what used to dominate peak memory.
 pub fn generate_consensus_pileups(
     twin_reads: &[TwinRead],
     consensuses: &mut [ConsensusSequence],
     args: &Cli,
+    cluster_indices: &[usize],
 ) -> Vec<Vec<Pileup>> {
     let max_seqs_consensus = MAX_SEQS_CONSENSUS;
 
     let pileups = Mutex::new(Vec::new());
 
-    // Process each consensus and its reads in parallel
-    consensuses
+    // Immutable reborrow so the parallel section can read while `consensuses` stays
+    // `&mut` for the hp_length writeback below.
+    let consensuses_ref: &[ConsensusSequence] = consensuses;
+
+    // Process the requested consensuses and their reads in parallel.
+    // `local_idx` indexes `cluster_indices`; `cluster_idx` is the global consensus index.
+    cluster_indices
         .par_iter()
         .enumerate()
-        .for_each(|(cluster_idx, consensus)| {
+        .for_each(|(local_idx, &cluster_idx)| {
+            let consensus = &consensuses_ref[cluster_idx];
             let cluster = &consensus.cluster;
             let consensus_seq = &consensus.sequence;
             let consensus_hp_lengths = &consensus.hp_lengths;
+
+            // Align reads from this cluster back to consensus
+            let reads_to_align = cluster.len().min(max_seqs_consensus);
 
             // Initialize pileup for this consensus with placeholder ref_hp_length (will be updated later)
             let mut cluster_pileup: Vec<Pileup> = consensus_seq
                 .iter()
                 .enumerate()
-                .map(|(pos, &base)| Pileup::new(pos, base, consensus_hp_lengths[pos]))
+                .map(|(pos, &base)| {
+                    Pileup::with_capacity(pos, base, consensus_hp_lengths[pos], reads_to_align)
+                })
                 .collect();
 
             // Create aligner with this consensus as reference
             let aligner = Aligner::builder()
                 .map_ont()
-                .with_index_threads(1) // Use 1 thread per aligner since we parallelize over consensuses
                 .with_cigar()
                 .with_seq(consensus_seq)
                 .expect("Failed to create aligner");
-
-            // Align reads from this cluster back to consensus
-            let reads_to_align = cluster.len().min(max_seqs_consensus);
 
             for i in 0..reads_to_align {
                 let read_idx = cluster[i];
@@ -631,7 +703,7 @@ pub fn generate_consensus_pileups(
                 cluster_idx,
                 cluster_pileup.len()
             );
-            pileups.lock().unwrap().push((cluster_idx, cluster_pileup));
+            pileups.lock().unwrap().push((local_idx, cluster_pileup));
         });
 
     let mut pileups = pileups.into_inner().unwrap();
@@ -715,11 +787,14 @@ pub fn generate_consensus_pileups(
         }
     }
 
-    // Update consensus HP lengths from modal values calculated from pileups
-    for (consensus, pileup) in consensuses.iter_mut().zip(pileups.iter()) {
-        // Extract modal HP lengths from pileup
-        let modal_hp_lengths: Vec<u8> = pileup.iter().map(|p| p.ref_hp_length).collect();
-        consensus.hp_lengths = modal_hp_lengths;
+    // Update consensus HP lengths from modal values calculated from pileups.
+    // Indexed through cluster_indices since `pileups` only covers the requested subset.
+    // This is idempotent: ref_hp_length is derived from the aligned reads (or set to 1
+    // when nothing aligns), never from the incoming hp_lengths, so regenerating a
+    // cluster's pileup in a later pass yields the same result.
+    for (local_idx, &cluster_idx) in cluster_indices.iter().enumerate() {
+        let modal_hp_lengths: Vec<u8> = pileups[local_idx].iter().map(|p| p.ref_hp_length).collect();
+        consensuses[cluster_idx].hp_lengths = modal_hp_lengths;
     }
 
     pileups
@@ -727,12 +802,10 @@ pub fn generate_consensus_pileups(
 
 /// Estimate error rate as a function of quality score from pileup data
 /// Uses top N clusters and filters positions with <5% error rate
-pub fn estimate_quality_error_rates(
-    pileups: &[Vec<Pileup>],
-    consensuses: &[ConsensusSequence],
-    top_frac: f64,
-) -> HashMap<u8, f64> {
-    // Select top N clusters by depth
+/// The top `top_frac` of clusters by depth, as global indices into `consensuses`.
+/// Error-rate estimation only needs these, so the caller builds pileups for just
+/// this subset rather than for every cluster.
+pub fn top_cluster_indices(consensuses: &[ConsensusSequence], top_frac: f64) -> Vec<usize> {
     let mut cluster_depths: Vec<(usize, usize)> = consensuses
         .iter()
         .enumerate()
@@ -740,15 +813,19 @@ pub fn estimate_quality_error_rates(
         .collect();
     cluster_depths.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
 
-    let top_clusters: Vec<usize> = cluster_depths
+    cluster_depths
         .iter()
         .take((top_frac * cluster_depths.len() as f64).round() as usize)
         .map(|(idx, _)| *idx)
-        .collect();
+        .collect()
+}
 
+/// `pileups` must already be restricted to the clusters of interest
+/// (see `top_cluster_indices`); every pileup passed in is used.
+pub fn estimate_quality_error_rates(pileups: &[Vec<Pileup>]) -> HashMap<u8, f64> {
     log::info!(
         "Analyzing quality error rates from top {} clusters",
-        top_clusters.len()
+        pileups.len()
     );
 
     // Track errors and total bases per quality score
@@ -756,13 +833,7 @@ pub fn estimate_quality_error_rates(
 
     let prior_count = 1;
 
-    for &cluster_idx in &top_clusters {
-        if cluster_idx >= pileups.len() {
-            continue;
-        }
-
-        let cluster_pileup = &pileups[cluster_idx];
-
+    for cluster_pileup in pileups {
         for pileup in cluster_pileup {
             // Calculate error rate at this position
             let mut total_bases = 0;
@@ -1066,14 +1137,16 @@ pub fn write_consensus_fasta(
 
 /// Polish consensus sequences using Bayesian inference with quality-aware error rates
 /// Trims low coverage ends and calculates posterior probabilities for each base
+/// Analyzes one batch of pileups and applies the results to the corresponding
+/// consensuses. `pileups[i]` describes the cluster `cluster_indices[i]`.
+/// Call `collect_low_quality_consensuses` once after all batches are analyzed.
 pub fn analyze_pileup_consensuses(
     mut pileups: Vec<Vec<Pileup>>,
+    cluster_indices: &[usize],
     consensuses: &mut Vec<ConsensusSequence>,
     quality_error_map: &HashMap<u8, f64>,
-    twin_reads: &[TwinRead],
     args: &Cli,
-    temp_dir: &PathBuf,
-) -> Vec<ConsensusSequence> {
+) {
     let bad_length_threshold = 100;
     let min_coverage_abs = (args.min_cluster_size * 3 / 4).max(2) as usize;
     let deletion_insertion_quality = 48u8; // Fixed quality for indels
@@ -1095,7 +1168,9 @@ pub fn analyze_pileup_consensuses(
     let debug_indices: Vec<usize> = vec![30];
 
     // Process each consensus
-    for (cluster_idx, cluster_pileup) in pileups.iter_mut().enumerate() {
+    for (local_idx, cluster_pileup) in pileups.iter_mut().enumerate() {
+        // Global consensus index, so logs and debug selection stay stable across batches
+        let cluster_idx = cluster_indices[local_idx];
         let min_coverage =
             (cluster_pileup.iter().map(|p| p.depth()).max().unwrap_or(0) / 3).max(min_coverage_abs);
         if cluster_pileup.is_empty() {
@@ -1319,21 +1394,22 @@ pub fn analyze_pileup_consensuses(
         }
     }
 
-    let cons_len = consensuses.len();
-    for i in 0..cons_len {
+    for local_idx in 0..pileups.len() {
+        // Global consensus index for this batch entry
+        let i = cluster_indices[local_idx];
         let mut low_confidence_positions = vec![];
-        for pileup in &pileups[i] {
+        for pileup in &pileups[local_idx] {
             if let Some(_) = pileup.alt_posterior {
                 low_confidence_positions.push(pileup.ref_pos);
             }
         }
 
-        if pileups[i].is_empty() {
+        if pileups[local_idx].is_empty() {
             log::warn!("Consensus {} has empty pileup after polishing", i);
             continue;
         }
-        let left_start = pileups[i].first().map(|p| p.ref_pos).unwrap();
-        let right_end = pileups[i].last().map(|p| p.ref_pos).unwrap() + 1; // +1 because ref_pos is 0-based and end index is exclusive
+        let left_start = pileups[local_idx].first().map(|p| p.ref_pos).unwrap();
+        let right_end = pileups[local_idx].last().map(|p| p.ref_pos).unwrap() + 1; // +1 because ref_pos is 0-based and end index is exclusive
 
         let start_polish = bad_length_threshold + left_start;
         let end_polish = right_end - bad_length_threshold;
@@ -1373,7 +1449,7 @@ pub fn analyze_pileup_consensuses(
                 consensus.sequence[pos] = b'N';
             }
         }
-        let pileups = &pileups[i];
+        let pileups = &pileups[local_idx];
         for pileup in pileups.iter() {
             if let Some(_) = pileup.alt_posterior {
                 if args.mask_low_quality {
@@ -1393,6 +1469,18 @@ pub fn analyze_pileup_consensuses(
         }
     }
 
+}
+
+/// Partitions `consensuses` on the low-quality criteria, writes the cluster TSVs, and
+/// returns the low-quality consensuses (which are removed from `consensuses`).
+/// Runs once after every pileup batch has been analyzed, since it needs the final
+/// per-consensus quality annotations for all clusters.
+pub fn collect_low_quality_consensuses(
+    consensuses: &mut Vec<ConsensusSequence>,
+    twin_reads: &[TwinRead],
+    args: &Cli,
+    temp_dir: &PathBuf,
+) -> Vec<ConsensusSequence> {
     let low_quality_consensuses = consensuses
         .iter()
         .filter(|c| lq_criteria(c, args))
@@ -1421,8 +1509,6 @@ pub fn analyze_pileup_consensuses(
     );
 
     log::info!("Polishing complete");
-
-    //Write to new fasta
 
     return low_quality_consensuses;
 }
@@ -2292,9 +2378,12 @@ pub fn refine_asv_depths_with_em(
                 .iter()
                 .map(|x| x.to_char().to_ascii_uppercase() as u8)
                 .collect();
-            let aligner = Aligner::builder()
-                .lrhq()
-                .with_index_threads(1) // Use 1 thread per aligner since we parallelize over consensuses
+            // This index covers one read and serves only the few candidate ASVs below,
+            // so index construction is a large share of the cost here. See
+            // SHORT_REF_BUCKET_BITS.
+            let mut builder = Aligner::builder().lrhq();
+            builder.idxopt.bucket_bits = SHORT_REF_BUCKET_BITS;
+            let aligner = builder
                 .with_cigar()
                 .with_seq(&seq_u8)
                 .expect("Failed to create aligner");
@@ -2654,9 +2743,10 @@ pub fn compute_per_sample_depths(
                     .iter()
                     .map(|x| x.to_char().to_ascii_uppercase() as u8)
                     .collect();
-                let aligner = Aligner::builder()
-                    .lrhq()
-                    .with_index_threads(1)
+                // Per-read index used for only a few candidate ASVs; see SHORT_REF_BUCKET_BITS.
+                let mut builder = Aligner::builder().lrhq();
+                builder.idxopt.bucket_bits = SHORT_REF_BUCKET_BITS;
+                let aligner = builder
                     .with_cigar()
                     .with_seq(&seq_u8)
                     .expect("Failed to create per-sample aligner");

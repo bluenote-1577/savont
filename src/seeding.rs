@@ -633,7 +633,7 @@ pub fn get_twin_read_syncmer(
         dna_seq = dna_seq_opt.unwrap();
     }
 
-    Some(TwinRead {
+    let mut twin_read = TwinRead {
         //snpmer_kmers,
         snpmer_positions: snpmer_positions_final,
         snpmer_kmers,
@@ -660,7 +660,10 @@ pub fn get_twin_read_syncmer(
         snpmer_id_threshold: None,
         lsh_signatures: vec![],
         file_idx: 0,
-    })
+    };
+    // Release the push-growth slack before this read joins the long-lived read set.
+    twin_read.shrink_seed_vecs();
+    Some(twin_read)
 }
 
 // pub fn get_twin_read(

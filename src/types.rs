@@ -710,6 +710,21 @@ impl TwinRead {
         &self.snpmer_kmers
     }
 
+    /// Drops `Vec` growth slack from the per-read seed vectors.
+    ///
+    /// These are all built by repeated `push`, so each can end up holding close to
+    /// twice the capacity it needs. Measured on a 1M-read run, `snpmer_kmers` alone
+    /// carried 59% slack (~445 MB). Twin reads live for the entire run, so paying one
+    /// realloc per vector at construction to release that is worthwhile.
+    pub fn shrink_seed_vecs(&mut self) {
+        self.snpmer_kmers.shrink_to_fit();
+        self.snpmer_positions.shrink_to_fit();
+        self.minimizer_kmers.shrink_to_fit();
+        self.minimizer_positions.shrink_to_fit();
+        self.blockmer_positions.shrink_to_fit();
+        self.blockmer_canonical.shrink_to_fit();
+    }
+
     // pub fn minimizers(&self) -> impl Iterator<Item = (u32, Kmer48)>+ '_ {
     //     //self.minimizer_positions.iter().zip(self.minimizer_kmers.iter()).map(|(x, y)| (*x, *y))
     //     self.minimizer_positions.iter().map(|&x| (x, self.kmer_from_position(x, self.k as usize)))

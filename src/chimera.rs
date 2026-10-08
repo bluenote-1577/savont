@@ -86,9 +86,11 @@ pub fn detect_chimeras(consensuses: &mut [ConsensusSequence], args: &Cli) -> Vec
             let ref_seq = ref_consensus.decompressed_sequence.as_ref()
                 .expect("Consensus sequence must be decompressed before chimera detection");
 
-            // Align query to this reference
-            let aligner = Aligner::builder()
-                .map_ont()
+            // Align query to this reference. One index serves a single map() call here,
+            // so index construction dominates; see SHORT_REF_BUCKET_BITS.
+            let mut builder = Aligner::builder().map_ont();
+            builder.idxopt.bucket_bits = crate::constants::SHORT_REF_BUCKET_BITS;
+            let aligner = builder
                 .with_cigar()
                 .with_seq(ref_seq)
                 .expect("Failed to create aligner");

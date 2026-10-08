@@ -60,6 +60,20 @@ pub const MAX_LENGTH_SEARCH: usize = 1_000_000;
 
 pub const MAX_SEQS_CONSENSUS: usize = 250;
 
+/// minimap2 index `bucket_bits` for short, single-amplicon references.
+///
+/// The minimap2 default of 14 allocates `1 << 14` = 16384 buckets (~640 KB, zeroed)
+/// no matter how small the reference is, which makes index construction cost ~190 us
+/// for a 1500 bp sequence regardless of its ~136 minimizers. Dropping to 4 (16 buckets)
+/// cuts that to ~35 us. This only changes how the minimizer hash table is sharded, so
+/// alignments are bit-identical (verified: NM matches exactly across bucket_bits
+/// 14/12/10/8/6/4/2 at 0, 3, 10, 30 and 75 substitutions).
+///
+/// Only worth setting where an index is built for a handful of queries. Where one index
+/// serves hundreds of reads (per-cluster aligners), build cost is already amortized to
+/// under 0.3% of runtime and this makes no measurable difference.
+pub const SHORT_REF_BUCKET_BITS: i16 = 4;
+
 pub const MAX_ALLOWABLE_SNPMER_ERROR_MISC: usize = 2;
 pub const MAX_ALLOWABLE_SNPMER_ERROR_DIVIDER: usize = 200;
 

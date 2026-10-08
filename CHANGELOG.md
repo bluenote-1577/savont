@@ -2,10 +2,17 @@
 
 All notable changes to savont will be documented in this file.
 
-## [0.7.1] - 2026-9-27
+## [0.8.0] - 2026-10-07
 
+- Reduced peak memory in Stage 4 (pileup analysis). Memory is now, for some datasets, reduced to a third of peak RAM! 
+- Increased speed by a bit (~10%)
 - Ran a `rustfmt` - will look like huge code changes occurred. 
 - Fixed a bug where empty consensus ASVs could cause savont to crash. 
+
+Technical changes:
+- Pileups were all materialized at once, so peak memory grew with the number of clusters (~12 MB per deep cluster), which could reach tens of GB on diverse communities with thousands of ASVs. Pileups are now generated and analyzed in batches bounded by a memory budget, and quality error-rate estimation only builds pileups for the deepest 10% of clusters it actually uses. 
+- Preallocated pileup base vectors (`Vec::with_capacity`), removing thousands of reallocations per cluster. This was a significant source of allocator churn at high thread counts.
+- Cut minimap2 index construction ~5-9x where an index is built per read and used for only a few queries, by lowering `bucket_bits` from the default 14 (16384 buckets, ~640 KB zeroed regardless of reference size) to 4 for short single-amplicon references. Alignments are unaffected: `bucket_bits` only shards the minimizer hash table.
 
 ## [0.7.0] - 2026-8-30
 
