@@ -2704,7 +2704,6 @@ pub fn compute_per_sample_depths(
             .collect(),
     );
 
-    let asv_twin_reads = Arc::new(asv_twin_reads);
     let asv_snpmer_index = Arc::new(asv_snpmer_index);
 
     for sample_k in 0..n_samples {
@@ -2722,7 +2721,6 @@ pub fn compute_per_sample_depths(
         let filtered_count = Mutex::new(0usize);
         let total_assigned = Mutex::new(0usize);
 
-        let asv_twin_reads_ref = Arc::clone(&asv_twin_reads);
         let asv_snpmer_index_ref = Arc::clone(&asv_snpmer_index);
         let asv_minimizer_sets_ref = Arc::clone(&asv_minimizer_sets);
         let asv_seqs_u8_ref = Arc::clone(&asv_seqs_u8);

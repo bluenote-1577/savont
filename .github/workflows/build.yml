@@ -1,0 +1,70 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x64
+            os: ubuntu-latest
+          - name: linux-aarch64
+            os: ubuntu-24.04-arm
+          - name: osx-arm64
+            os: macos-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry and target
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.name }}
+
+      # --locked builds exactly what Cargo.lock pins. Without it the resolver picks the
+      # newest semver-compatible versions, which is how a broken bio-seq-derive 4.12.2
+      # got pulled in once. The deps-unlocked job below covers that case separately.
+      - name: Build
+        run: cargo build --release --locked
+
+      - name: Check the binary runs
+        run: ./target/release/savont --version
+
+  # Resolves dependencies fresh instead of using Cargo.lock, which is what
+  # `cargo install --path .` and the bioconda recipe do. This is the early warning for
+  # upstream breakage; it reports without failing the workflow, since a broken release
+  # from a dependency is not something a PR here can fix.
+  deps-unlocked:
+    name: linux-x64 (deps unlocked)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry and target
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: deps-unlocked
+
+      - name: Re-resolve dependencies to latest compatible
+        run: cargo update
+
+      - name: Build
+        run: cargo build --release
