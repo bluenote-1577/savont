@@ -1,7 +1,7 @@
 use crate::cli::ClusterArgs as Cli;
 use crate::constants::LSH_NUM_TABLES;
 use crate::types::*;
-use fxhash::FxHashMap;
+use fxhash::{FxHashMap, FxHashSet};
 use rayon::prelude::*;
 use std::collections::HashMap;
 use std::io::Write;
@@ -89,11 +89,18 @@ pub fn cluster_reads_by_kmers(
     // Bucket index for LSH
     let mut bucket_index: BucketIndex = vec![FxHashMap::default(); LSH_NUM_TABLES];
 
-    // Cluster assignments: read_id -> representative_read_id
-    let cluster_assignment: Mutex<HashMap<usize, usize>> = Mutex::new(HashMap::new());
+    // Cluster assignments: read_id -> representative_read_id.
+    // This loop is sequential, so no lock is needed.
+    let mut cluster_assignment: HashMap<usize, usize> = HashMap::new();
 
     // Representative reads (reads added to the index)
     let mut representatives: Vec<usize> = Vec::new();
+
+    // Minimizer set per representative, built once when a read becomes a representative.
+    // The verification step below used to call `Vec::contains` (a linear scan) once per
+    // read k-mer per candidate; probing a prebuilt set instead turns that inner loop from
+    // O(|read| * |rep|) comparisons into O(|read|) hash lookups.
+    let mut rep_kmer_sets: FxHashMap<usize, FxHashSet<Kmer48>> = FxHashMap::default();
 
     // Process reads sequentially
     for (read_id, read) in twin_reads.iter().enumerate() {
@@ -108,7 +115,11 @@ pub fn cluster_reads_by_kmers(
             } else {
                 // Get top candidates sorted by number of bucket hits
                 let mut candidates: Vec<(usize, usize)> = bucket_hits.into_iter().collect();
-                candidates.par_sort_by(|a, b| (b.1, b.0).cmp(&(a.1, a.0))); // Sort by hits descending
+                // Sort by hits descending. This runs once per read inside a sequential
+                // loop, so rayon's task overhead outweighs any gain on these short lists.
+                // `(hits, id)` is a total order (ids are unique), so unstable sorting is
+                // deterministic and matches the previous parallel sort exactly.
+                candidates.sort_unstable_by(|a, b| (b.1, b.0).cmp(&(a.1, a.0)));
                                                                             //println!("Top candidates for read {}: {:?}", read_id, &candidates[..candidates.len().min(5)]);
 
                 // Find the maximum number of hits
@@ -128,18 +139,15 @@ pub fn cluster_reads_by_kmers(
                 let mut best_similarity = 0.0;
                 let mut best_candidate = None;
 
-                let read_kmer_set: std::collections::HashSet<_> =
-                    read_kmers.iter().cloned().collect();
+                let read_kmer_set: FxHashSet<Kmer48> = read_kmers.iter().cloned().collect();
 
                 for &cand_id in &candidates_to_check {
                     let rep_kmers = twin_reads[cand_id].minimizer_kmers();
-                    let mut count = 0;
-
-                    for kmer in read_kmer_set.iter() {
-                        if rep_kmers.contains(kmer) {
-                            count += 1;
-                        }
-                    }
+                    // Counts distinct read k-mers present in the representative, exactly as
+                    // the previous `rep_kmers.contains(..)` scan did. The denominator keeps
+                    // using the Vec length (which may contain duplicates), not the set size.
+                    let rep_set = &rep_kmer_sets[&cand_id];
+                    let count = read_kmer_set.iter().filter(|k| rep_set.contains(k)).count();
 
                     let ratio = count as f64 / read_kmer_set.len().max(rep_kmers.len()) as f64;
                     let similarity = ratio.powf(1.0 / k as f64);
@@ -173,7 +181,7 @@ pub fn cluster_reads_by_kmers(
 
         if let Some(rep_id) = best_rep {
             // Assign this read to the cluster of the representative
-            cluster_assignment.lock().unwrap().insert(read_id, rep_id);
+            cluster_assignment.insert(read_id, rep_id);
         } else {
             // No match found - this read becomes a new representative
             if use_bucketed {
@@ -181,8 +189,9 @@ pub fn cluster_reads_by_kmers(
             } else {
                 add_read_to_index(&mut index, read_id, &read_kmers);
             }
-            cluster_assignment.lock().unwrap().insert(read_id, read_id); // Represents itself
+            cluster_assignment.insert(read_id, read_id); // Represents itself
             representatives.push(read_id);
+            rep_kmer_sets.insert(read_id, read_kmers.iter().cloned().collect());
         }
 
         if read_id % 10000 == 0 && read_id > 0 {
@@ -200,7 +209,7 @@ pub fn cluster_reads_by_kmers(
         representatives.len()
     );
 
-    let cluster_assignment = cluster_assignment.into_inner().unwrap();
+    // (sequential loop above, so this is already a plain map)
 
     // Build clusters from assignments
     let mut clusters_map: HashMap<usize, Vec<usize>> = HashMap::new();

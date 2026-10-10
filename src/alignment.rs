@@ -2069,15 +2069,20 @@ fn refine_asv_depths_with_minimap2(
         best_asv_indices.dedup();
 
         {
-            let mut writer = mapping_file_writer.lock().unwrap();
+            // Format outside the lock; this read's rows still go out contiguously.
+            let mut row_buf = String::new();
             for &asv_idx in &best_asv_indices {
-                writeln!(
-                    writer,
+                use std::fmt::Write as _;
+                let _ = writeln!(
+                    row_buf,
                     "{}\tdebug_id:{}\t{}",
                     twin_read.id, consensuses[asv_idx].id, best_nm
-                )
-                .expect("Failed to write read_to_asv_mappings.tsv");
+                );
             }
+            let mut writer = mapping_file_writer.lock().unwrap();
+            writer
+                .write_all(row_buf.as_bytes())
+                .expect("Failed to write read_to_asv_mappings.tsv");
         }
 
         if best_asv_indices.len() == 1 {
@@ -2276,6 +2281,24 @@ pub fn refine_asv_depths_with_em(
         "Built SNPmer index with {} unique splitmers",
         asv_snpmer_index.len()
     );
+
+    // Precompute the per-ASV minimizer sets and uppercased sequences once. Both were
+    // previously rebuilt inside the per-read loop for every candidate ASV, i.e. millions
+    // of times over a run, even though the ASV set is fixed here.
+    let asv_minimizer_sets: Vec<FxHashSet<Kmer48>> = asv_twin_reads
+        .iter()
+        .map(|t| t.minimizer_kmers().iter().cloned().collect())
+        .collect();
+    let asv_seqs_u8: Vec<Vec<u8>> = asv_twin_reads
+        .iter()
+        .map(|t| {
+            t.dna_seq
+                .iter()
+                .map(|x| x.to_char().to_ascii_uppercase() as u8)
+                .collect()
+        })
+        .collect();
+
     log::info!(
         "Mapping {} reads to {} ASVs using k-mer comparison",
         twin_reads.len(),
@@ -2314,12 +2337,8 @@ pub fn refine_asv_depths_with_em(
 
             for (asv_idx, (_matches, mismatches)) in candidate_stats {
                 // Count matching minimizers between read and this ASV
-                let asv_minimizers: FxHashSet<Kmer48> = asv_twin_reads[asv_idx]
-                    .minimizer_kmers()
-                    .into_iter()
-                    .cloned()
-                    .collect();
-                let minimizer_matches = read_minimizers.intersection(&asv_minimizers).count();
+                let asv_minimizers = &asv_minimizer_sets[asv_idx];
+                let minimizer_matches = read_minimizers.intersection(asv_minimizers).count();
 
                 if minimizer_matches == 0 {
                     continue; // Skip if no minimizer overlap
@@ -2389,14 +2408,9 @@ pub fn refine_asv_depths_with_em(
                 .expect("Failed to create aligner");
 
             for (asv_idx, mismatches) in best_asv_indices.into_iter() {
-                let asv_tr = &asv_twin_reads[asv_idx];
-                let seq_u8_asv: Vec<u8> = asv_tr
-                    .dna_seq
-                    .iter()
-                    .map(|x| x.to_char().to_ascii_uppercase() as u8)
-                    .collect();
+                let seq_u8_asv = &asv_seqs_u8[asv_idx];
                 let alignment_result = aligner
-                    .map(&seq_u8_asv, true, false, None, None, None)
+                    .map(seq_u8_asv, true, false, None, None, None)
                     .unwrap();
                 if alignment_result.is_empty() {
                     continue;
@@ -2418,17 +2432,23 @@ pub fn refine_asv_depths_with_em(
                 .map(|(asv_idx, _, _)| *asv_idx)
                 .collect::<Vec<usize>>();
 
-            // Map to file
+            // Map to file. Format outside the lock, then emit this read's rows in one
+            // write: the rows for a read stay contiguous and in the same order, but the
+            // lock is no longer held across five separate formatting calls.
             {
-                let mut mapping_file_writer = mapping_file_writer.lock().unwrap();
+                let mut row_buf = String::new();
                 for (asv_idx, mini_matches, mismatches) in best_alns.iter().take(5) {
-                    writeln!(
-                        mapping_file_writer,
+                    use std::fmt::Write as _;
+                    let _ = writeln!(
+                        row_buf,
                         "{}\tdebug_id:{}\t{}\t{}",
                         twin_read.id, consensuses[*asv_idx].id, mismatches, mini_matches
-                    )
-                    .expect("Failed to write to read_to_asv_mappings.tsv");
+                    );
                 }
+                let mut mapping_file_writer = mapping_file_writer.lock().unwrap();
+                mapping_file_writer
+                    .write_all(row_buf.as_bytes())
+                    .expect("Failed to write to read_to_asv_mappings.tsv");
             }
 
             // Only keep reads that have at least one good mapping
@@ -2664,6 +2684,26 @@ pub fn compute_per_sample_depths(
         }
     }
 
+    // Precomputed once and shared across every sample iteration; these were previously
+    // rebuilt per (read, candidate ASV), i.e. n_samples times over as well.
+    let asv_minimizer_sets: Arc<Vec<FxHashSet<Kmer48>>> = Arc::new(
+        asv_twin_reads
+            .iter()
+            .map(|t| t.minimizer_kmers().iter().cloned().collect())
+            .collect(),
+    );
+    let asv_seqs_u8: Arc<Vec<Vec<u8>>> = Arc::new(
+        asv_twin_reads
+            .iter()
+            .map(|t| {
+                t.dna_seq
+                    .iter()
+                    .map(|x| x.to_char().to_ascii_uppercase() as u8)
+                    .collect()
+            })
+            .collect(),
+    );
+
     let asv_twin_reads = Arc::new(asv_twin_reads);
     let asv_snpmer_index = Arc::new(asv_snpmer_index);
 
@@ -2684,6 +2724,8 @@ pub fn compute_per_sample_depths(
 
         let asv_twin_reads_ref = Arc::clone(&asv_twin_reads);
         let asv_snpmer_index_ref = Arc::clone(&asv_snpmer_index);
+        let asv_minimizer_sets_ref = Arc::clone(&asv_minimizer_sets);
+        let asv_seqs_u8_ref = Arc::clone(&asv_seqs_u8);
 
         twin_reads
             .par_iter()
@@ -2698,12 +2740,8 @@ pub fn compute_per_sample_depths(
 
                 let mut asv_scores: Vec<(usize, f64, usize, usize)> = Vec::new();
                 for (asv_idx, (_matches, mismatches)) in candidate_stats {
-                    let asv_minimizers: FxHashSet<Kmer48> = asv_twin_reads_ref[asv_idx]
-                        .minimizer_kmers()
-                        .into_iter()
-                        .cloned()
-                        .collect();
-                    let minimizer_matches = read_minimizers.intersection(&asv_minimizers).count();
+                    let asv_minimizers = &asv_minimizer_sets_ref[asv_idx];
+                    let minimizer_matches = read_minimizers.intersection(asv_minimizers).count();
                     if minimizer_matches == 0 {
                         continue;
                     }
@@ -2753,14 +2791,9 @@ pub fn compute_per_sample_depths(
 
                 let mut best_alns: Vec<(usize, i32)> = Vec::new();
                 for (asv_idx, _) in best_asv_indices {
-                    let asv_tr = &asv_twin_reads_ref[asv_idx];
-                    let seq_u8_asv: Vec<u8> = asv_tr
-                        .dna_seq
-                        .iter()
-                        .map(|x| x.to_char().to_ascii_uppercase() as u8)
-                        .collect();
+                    let seq_u8_asv = &asv_seqs_u8_ref[asv_idx];
                     let aln = aligner
-                        .map(&seq_u8_asv, true, false, None, None, None)
+                        .map(seq_u8_asv, true, false, None, None, None)
                         .unwrap();
                     if aln.is_empty() {
                         continue;

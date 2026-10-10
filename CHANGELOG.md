@@ -2,17 +2,19 @@
 
 All notable changes to savont will be documented in this file.
 
-## [0.8.0] - 2026-10-07
+## [0.8.0] - 2026-10-10 
 
-- Reduced peak memory in Stage 4 (pileup analysis). Memory is now, for some datasets, reduced to a third of peak RAM! 
-- Increased speed by a bit (~10%)
+- Reduced peak memory in Stage 4 (pileup analysis). Memory is now, for some datasets, reduced to a third of peak RAM (~2.9x less memory)
+- Increased speed substantially: ~1.3x faster end-to-end, with read clustering ~3.3x faster and EM refinement ~1.6x faster. About 1.7x faster. 
 - Ran a `rustfmt` - will look like huge code changes occurred. 
 - Fixed a bug where empty consensus ASVs could cause savont to crash. 
 
 Technical changes:
-- Pileups were all materialized at once, so peak memory grew with the number of clusters (~12 MB per deep cluster), which could reach tens of GB on diverse communities with thousands of ASVs. Pileups are now generated and analyzed in batches bounded by a memory budget, and quality error-rate estimation only builds pileups for the deepest 10% of clusters it actually uses. 
-- Preallocated pileup base vectors (`Vec::with_capacity`), removing thousands of reallocations per cluster. This was a significant source of allocator churn at high thread counts.
-- Cut minimap2 index construction ~5-9x where an index is built per read and used for only a few queries, by lowering `bucket_bits` from the default 14 (16384 buckets, ~640 KB zeroed regardless of reference size) to 4 for short single-amplicon references. Alignments are unaffected: `bucket_bits` only shards the minimizer hash table.
+- Greedy clustering verified candidates with `Vec::contains` (a linear scan). Representative k-mer sets are now prebuilt, making the inner loop hash lookups instead. ~3x speedup.
+- EM refinement rebuilt each candidate ASV's minimizer set and uppercased sequence inside the per-read loop; both are now precomputed once per ASV. Stage 7: 1.5x speedup. 
+- Pileups were all materialized at once, so peak memory grew with cluster count (tens of GB on diverse communities). They are now built and analyzed in batches under a memory budget, and error-rate estimation only builds the deepest 10% it actually uses.
+- Preallocated pileup base vectors (`Vec::with_capacity`), removing thousands of reallocations per cluster.
+- Lowered minimap2 `bucket_bits` from 14 to 4 for short references, cutting index construction ~5-9x where an index serves only a few queries. `bucket_bits` only shards the minimizer hash table, so alignments are unaffected.
 
 ## [0.7.0] - 2026-8-30
 

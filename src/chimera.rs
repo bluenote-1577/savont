@@ -434,6 +434,10 @@ fn calculate_pairwise_similarities(
 
         let depth_i = cons_i.depth;
 
+        // Collected locally and merged under a single lock below; locking per pair
+        // serialized all threads on this inner O(n^2) loop.
+        let mut local_similarities: Vec<((usize, usize), f64)> = Vec::new();
+
         for (j, cons_j) in consensuses.iter().enumerate() {
             if i >= j {
                 continue; // Only calculate once per pair
@@ -466,10 +470,16 @@ fn calculate_pairwise_similarities(
                             0.0
                         };
 
-                        similarities.lock().unwrap().insert((j, i), identity);
+                        local_similarities.push(((j, i), identity));
                     }
                 }
             }
+        }
+
+        // One lock per outer iteration instead of one per pair. Keys (j, i) are unique
+        // across the whole loop, so the merged map is identical either way.
+        if !local_similarities.is_empty() {
+            similarities.lock().unwrap().extend(local_similarities);
         }
     });
 
