@@ -1,4 +1,4 @@
-# savont - Amplicon Sequence Variants (ASVs) and taxonomic profiling for long read amplicons
+# savont - Amplicon Sequence Variants (ASVs) and taxonomic profiling for nanopore or PacBio long-read amplicons
 
 
 **Savont** generates [**Amplicon Sequence Variants (ASVs)**](https://en.wikipedia.org/wiki/Amplicon_sequence_variant) at **single-nucleotide resolution** from long-read amplicon sequencing data such as
