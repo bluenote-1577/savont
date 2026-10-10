@@ -21,6 +21,11 @@ spmc = "0.3"
 fishers_exact = "1.0"
 fxhash = "0"
 bio-seq = { version = "0.14", features = ["serde"]}
+# Not used directly. bio-seq accepts bio-seq-derive ^4.11, but 4.12.x calls the
+# still-unstable `u8::bit_width()` and so fails to build on stable Rust. Pinning here
+# constrains the resolver even for builds that ignore Cargo.lock (e.g. `cargo install`).
+# Remove once a fixed bio-seq-derive is released.
+bio-seq-derive = "=4.11.0"
 memory-stats = "1.2.0"
 fastbloom = "0.11.0"
 crossbeam-channel = "0.5.13"

@@ -1125,6 +1125,7 @@ dependencies = [
  "assert_cmd",
  "bincode",
  "bio-seq",
+ "bio-seq-derive",
  "built",
  "clap",
  "clap-markdown",
