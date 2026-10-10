@@ -59,7 +59,10 @@ mamba install -c bioconda savont
 
 ## Quick start for trimmed full-length 16S amplicons
 
-#### Step 1: get ASVs from primer/adapter trimmed reads
+#### Step 1: get 16S ASVs from primer/adapter trimmed reads
+
+> [!NOTE]
+> If you're not using full length 16S reads (~1.5 kbp), then please set the `--min-read-length` and `--max-read-length` parameters. 
 
 You can either run savont in single-sample mode or pool samples together. See [documentation on multi-sample profiling](#multi-sample-savont-workflow).
 
