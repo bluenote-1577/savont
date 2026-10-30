@@ -2,6 +2,11 @@
 
 All notable changes to savont will be documented in this file.
 
+## [0.8.1] - 2026-10-28
+
+- Fixed `final_assignments.tsv` showing every read as `unassigned` when read names contain tabs (dorado writes BAM tags there). `read_id` is now the name up to the first whitespace.
+- Now reports the percentage of reads carrying cutadapt's trailing `rc` marker, and warns when none do.
+
 ## [0.8.0] - 2026-10-10 
 
 - Reduced peak memory in Stage 4 (pileup analysis). Memory is now, for some datasets, reduced to a third of peak RAM (~2.9x less memory)

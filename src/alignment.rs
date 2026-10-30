@@ -1023,29 +1023,37 @@ pub fn write_final_assignments(
     // Parse read_to_asv_mappings.tsv: keep only the first (best) row per read.
     // k-mer/EM path columns: read_id, debug_id:N, snpmer_mm, minimap2_nm
     // minimap2 path columns: read_id, debug_id:N, minimap2_nm
+    //
+    // The `debug_id:` field is located by prefix rather than by a fixed column index.
+    // Read names can themselves contain tabs (dorado writes BAM tags like `qs:f:32.2`
+    // tab-separated in the FASTQ header), which shifts every later column and would
+    // otherwise make every read look unassigned.
     let mut read_to_asv: HashMap<String, (usize, i32)> = HashMap::new(); // read_id → (final_idx, nm)
     if mappings_path.exists() {
         let reader = BufReader::new(std::fs::File::open(mappings_path)?);
         for line in reader.lines() {
             let line = line?;
-            let parts: Vec<&str> = line.splitn(5, '\t').collect();
-            if parts.len() < 3 {
+            let parts: Vec<&str> = line.split('\t').collect();
+            let Some(tag_pos) = parts.iter().position(|p| p.starts_with("debug_id:")) else {
+                continue;
+            };
+            if tag_pos == 0 || parts.len() <= tag_pos + 1 {
                 continue;
             }
-            let read_id = parts[0].to_string();
+            // Everything before the tag is the read name; trailing fields are numeric.
+            let read_id = parts[..tag_pos].join("\t");
             if read_to_asv.contains_key(&read_id) {
                 continue;
             } // first row wins
-            let debug_id: usize = parts[1]
+            let Some(debug_id) = parts[tag_pos]
                 .strip_prefix("debug_id:")
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(usize::MAX);
-            // 4-column (k-mer/EM): col3 is minimap2_nm; 3-column (minimap2): col2 is nm
-            let nm: i32 = if parts.len() >= 4 {
-                parts[3].parse().unwrap_or(0)
-            } else {
-                parts[2].parse().unwrap_or(0)
+                .and_then(|s| s.parse::<usize>().ok())
+            else {
+                continue;
             };
+            // k-mer/EM path appends (snpmer_mm, minimap2_nm); minimap2 path appends (nm).
+            // Either way the minimap2 NM is the last field.
+            let nm: i32 = parts[parts.len() - 1].parse().unwrap_or(0);
             if let Some(&final_idx) = debug_to_final.get(&debug_id) {
                 read_to_asv.insert(read_id, (final_idx, nm));
             }
@@ -1063,7 +1071,10 @@ pub fn write_final_assignments(
             Some(e) => format!("{:.4}", e),
             None => "NA".to_string(),
         };
-        match read_to_asv.get(&read.id) {
+        // `base_id` is the read name up to the first whitespace. The full `id` keeps any
+        // trailing FASTQ header comment, which for dorado output contains tab-separated
+        // BAM tags and would break this TSV's columns.
+        match read_to_asv.get(&read.base_id) {
             Some(&(final_idx, nm)) => {
                 let (label, asv_len) = idx_to_info
                     .get(&final_idx)
@@ -1075,10 +1086,14 @@ pub fn write_final_assignments(
                 } else {
                     0.0
                 };
-                writeln!(writer, "{}\t{}\t{:.4}\t{}", read.id, label, identity, est)?;
+                writeln!(
+                    writer,
+                    "{}\t{}\t{:.4}\t{}",
+                    read.base_id, label, identity, est
+                )?;
             }
             None => {
-                writeln!(writer, "{}\tunassigned\tNA\t{}", read.id, est)?;
+                writeln!(writer, "{}\tunassigned\tNA\t{}", read.base_id, est)?;
             }
         }
     }
@@ -2076,7 +2091,7 @@ fn refine_asv_depths_with_minimap2(
                 let _ = writeln!(
                     row_buf,
                     "{}\tdebug_id:{}\t{}",
-                    twin_read.id, consensuses[asv_idx].id, best_nm
+                    twin_read.base_id, consensuses[asv_idx].id, best_nm
                 );
             }
             let mut writer = mapping_file_writer.lock().unwrap();
@@ -2442,7 +2457,7 @@ pub fn refine_asv_depths_with_em(
                     let _ = writeln!(
                         row_buf,
                         "{}\tdebug_id:{}\t{}\t{}",
-                        twin_read.id, consensuses[*asv_idx].id, mismatches, mini_matches
+                        twin_read.base_id, consensuses[*asv_idx].id, mismatches, mini_matches
                     );
                 }
                 let mut mapping_file_writer = mapping_file_writer.lock().unwrap();

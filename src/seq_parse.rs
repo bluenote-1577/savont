@@ -395,6 +395,12 @@ fn second_iteration(
 
     let fq_files = args.input_files.clone();
     thread::spawn(move || {
+        // Track how many reads carry cutadapt's `rc` marker. If a pipeline strips or
+        // displaces it (e.g. a tool appends to the header after cutadapt, or
+        // `--rename` is used), detection silently fails and reads stay in mixed
+        // orientation, which badly degrades clustering with no other symptom.
+        let mut rc_reads: usize = 0;
+        let mut total_reads: usize = 0;
         for fq_file in fq_files {
             let bufreader = BufReader::new(std::fs::File::open(fq_file).expect("valid path"));
             let mut reader = needletail::parse_fastx_reader(bufreader).expect("valid path");
@@ -404,7 +410,9 @@ fn second_iteration(
                 let last_field = rec_id_string.split_whitespace().last().unwrap_or("");
                 let seq;
                 let qualities;
+                total_reads += 1;
                 if last_field == "rc" {
+                    rc_reads += 1;
                     seq = reverse_complement(&rec.seq().to_vec());
                     qualities = rec.qual().map(|q| q.iter().rev().cloned().collect());
                 } else {
@@ -412,6 +420,23 @@ fn second_iteration(
                     qualities = rec.qual().map(Vec::from);
                 }
                 tx_head.send((seq, qualities)).unwrap();
+            }
+        }
+        if total_reads > 0 {
+            let pct = 100.0 * rc_reads as f64 / total_reads as f64;
+            log::info!(
+                "Reverse-complemented {} / {} reads ({:.2}%) marked with a trailing 'rc' in the read name",
+                rc_reads,
+                total_reads,
+                pct
+            );
+            if rc_reads == 0 {
+                log::warn!(
+                    "No reads IDs carry the trailing 'rc' marker from cutadapt. This is fine if your reads have mixed orientation.
+                     However, if your reads were all oriented \
+                     forward by upstream software, savont cannot tell which ones were flipped. \
+                     Consider using the --single-strand option."
+                );
             }
         }
         drop(tx_head);
