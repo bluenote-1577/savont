@@ -143,7 +143,7 @@ fn collect_best_mappings(
 ) -> Vec<(usize, String, f64, u32, usize, String, String)> {
     let fasta_str = db.fasta_path.to_str().unwrap();
     let mmi_path = format!("{}.mmi", fasta_str);
-    let aligner = if Path::new(&mmi_path).exists() {
+    let mut aligner = if Path::new(&mmi_path).exists() {
         log::info!("Loading pre-built minimap2 index: {}", mmi_path);
         minimap2::Aligner::builder()
             .map_ont()
@@ -164,6 +164,7 @@ fn collect_best_mappings(
             .with_index(fasta_str, Some(&mmi_path))
             .expect("Failed to build minimap2 index")
     };
+    aligner.mapopt.best_n = args.max_secondary;
 
     log::info!(
         "Aligning {} consensus sequences to database",

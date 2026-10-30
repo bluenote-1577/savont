@@ -209,6 +209,10 @@ pub struct ClassifyArgs {
     #[arg(long, default_value_t = 94.5)]
     pub genus_threshold: f64,
 
+    /// Maximum number of secondary minimap2 alignments per ASV (default: 5)
+    #[arg(long, default_value_t = 5, value_parser = clap::value_parser!(i32).range(1..))]
+    pub max_secondary: i32,
+
     /// Explicitly output "UNCLASSIFIED-(asv_header)" for unassigned ranks in species/genus columns instead of using "UNCLASSIFIED"
     #[arg(long, default_value_t = false)]
     pub detailed_unclassified: bool,

@@ -187,7 +187,12 @@ savont classify -i savont-out -d databases/silva-138.2 -t 20
 # Adjust identity thresholds
 savont classify -i savont-out -d databases/emu-1 \
     --species-threshold 99.9 --genus-threshold 90.0
+
+# Retain more secondary alignments when many references match an ASV
+savont classify -i savont-out -d databases/emu-1 --max-secondary 20
 ```
+
+`--max-secondary` limits secondary minimap2 alignments per ASV (default: 5, in addition to the primary alignment). Higher values can retain more tied reference hits for abundance estimation.
 
 ### Step 2b: Classify ASVs with SINTAX (`savont sintax`)
 
