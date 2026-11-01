@@ -431,11 +431,8 @@ fn second_iteration(
                 pct
             );
             if rc_reads == 0 {
-                log::warn!(
-                    "No reads IDs carry the trailing 'rc' marker from cutadapt. This is fine if your reads have mixed orientation.
-                     However, if your reads were all oriented \
-                     forward by upstream software, savont cannot tell which ones were flipped. \
-                     Consider using the --single-strand option."
+                log::info!(
+                    "No reads IDs carry the trailing 'rc' marker from cutadapt. This is fine if your reads have mixed orientation."
                 );
             }
         }
