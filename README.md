@@ -133,7 +133,7 @@ Savont requires either:
 1. reads in their mixed orientation (i.e., a mix of forward and reverse)
 2. `cutadapt --rc` is run: cutadapt flips reads so that all are forward and appends ` rc` to the name of each read it flipped.
 
-Savont automatically detects if an `rc` flag is appended and reverses the reads internally. However, if all reads are forward strand and no `rc` flag is appended`, you must use the `--single-strand` argument. 
+Savont automatically detects if an `rc` flag is appended and reverses the reads internally. However, if all reads are forward strand and no `rc` flag is appended, you must use the `--single-strand` argument. 
 
 #### Multi-sample savont workflow
 
