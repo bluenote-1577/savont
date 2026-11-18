@@ -6,11 +6,23 @@ const MARKER_FILE: &str = ".savont_db";
 /// Flat keyword list used by the CLI `possible_values` validator.
 pub const KEYWORDS: &[&str] = &["emu-1", "silva-138.2", "greengenes2-2024.09", "unite-10.0"];
 
+// Download URLs, shared by the download functions and the reachability test
+// (tests/database_urls.rs).
+const EMU_URL: &str = "https://osf.io/8qcwd/download";
+const SILVA_FASTA_URL: &str = "https://www.arb-silva.de/fileadmin/silva_databases/release_138.2/Exports/SILVA_138.2_SSURef_NR99_tax_silva_trunc.fasta.gz";
+const SILVA_TAX_URL: &str = "https://www.arb-silva.de/fileadmin/silva_databases/release_138.2/Exports/taxonomy/taxmap_slv_ssu_ref_nr_138.2.txt.gz";
+const GG2_URL: &str =
+    "https://zenodo.org/records/14169078/files/gg2_2024_09_toSpecies_trainset.fa.gz";
+const UNITE_URL: &str =
+    "https://s3.hpc.ut.ee/plutof-public/original/e861a3d6-54f4-42dc-882a-5f129beac39a.tgz";
+
 /// Describes one versioned database: how to download it, load it, and extract
 /// a lookup key from a minimap2 target-name string.
 pub struct DatabaseDef {
     pub keyword: &'static str,
     pub description: &'static str,
+    /// Every URL `download` fetches. Keep in sync with the download function.
+    pub urls: &'static [&'static str],
     pub download: fn(dest: &Path) -> Result<(), String>,
     pub load: fn(dir: &Path) -> Result<Database, std::io::Error>,
     pub extract_key: fn(header: &str) -> Option<String>,
@@ -21,6 +33,7 @@ pub const ALL: &[DatabaseDef] = &[
     DatabaseDef {
         keyword: KEYWORDS[0],
         description: "EMU default 16S rRNA database",
+        urls: &[EMU_URL],
         download: download_emu,
         load: Database::load_emu,
         extract_key: taxonomy::extract_tax_id_from_header,
@@ -28,6 +41,7 @@ pub const ALL: &[DatabaseDef] = &[
     DatabaseDef {
         keyword: KEYWORDS[1],
         description: "SILVA SSU Ref NR99 v138.2",
+        urls: &[SILVA_FASTA_URL, SILVA_TAX_URL],
         download: download_silva,
         load: Database::load_silva,
         extract_key: taxonomy::extract_silva_accession_from_header,
@@ -35,6 +49,7 @@ pub const ALL: &[DatabaseDef] = &[
     DatabaseDef {
         keyword: KEYWORDS[2],
         description: "GreenGenes2 2024.09 species-level trainset from DADA2",
+        urls: &[GG2_URL],
         download: download_gg2,
         load: Database::load_gg2,
         extract_key: taxonomy::extract_gg2_key_from_header,
@@ -42,6 +57,7 @@ pub const ALL: &[DatabaseDef] = &[
     DatabaseDef {
         keyword: KEYWORDS[3],
         description: "UNITE ITS 10.0 — dynamic divergence thresholding, all eukaryotes",
+        urls: &[UNITE_URL],
         download: download_unite,
         load: Database::load_unite,
         extract_key: taxonomy::extract_unite_key_from_header,
@@ -113,7 +129,7 @@ fn download_emu(dest: &Path) -> Result<(), String> {
 
     let s = Command::new("wget")
         .arg("--content-disposition")
-        .arg("https://osf.io/8qcwd/download")
+        .arg(EMU_URL)
         .arg("-O")
         .arg(&tar)
         .status()
@@ -153,8 +169,8 @@ fn download_emu(dest: &Path) -> Result<(), String> {
 
 fn download_silva(dest: &Path) -> Result<(), String> {
     log::info!("Downloading SILVA database...");
-    let fasta_url = "https://www.arb-silva.de/fileadmin/silva_databases/release_138.2/Exports/SILVA_138.2_SSURef_NR99_tax_silva_trunc.fasta.gz";
-    let tax_url   = "https://www.arb-silva.de/fileadmin/silva_databases/release_138.2/Exports/taxonomy/taxmap_slv_ssu_ref_nr_138.2.txt.gz";
+    let fasta_url = SILVA_FASTA_URL;
+    let tax_url = SILVA_TAX_URL;
 
     let s = Command::new("wget")
         .arg(fasta_url)
@@ -188,7 +204,7 @@ fn download_silva(dest: &Path) -> Result<(), String> {
 
 fn download_gg2(dest: &Path) -> Result<(), String> {
     log::info!("Downloading GreenGenes2 2024.09 species-level database...");
-    let url = "https://zenodo.org/records/14169078/files/gg2_2024_09_toSpecies_trainset.fa.gz";
+    let url = GG2_URL;
 
     let s = Command::new("wget")
         .arg(url)
@@ -242,8 +258,7 @@ fn download_unite(dest: &Path) -> Result<(), String> {
     log::info!(
         "Downloading UNITE ITS 10.0 database (dynamic divergence thresholding, all eukaryotes)..."
     );
-    let url =
-        "https://s3.hpc.ut.ee/plutof-public/original/e861a3d6-54f4-42dc-882a-5f129beac39a.tgz";
+    let url = UNITE_URL;
     let tar = dest.join("unite-10.0.tgz");
 
     let s = Command::new("wget")
