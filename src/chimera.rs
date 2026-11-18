@@ -470,7 +470,8 @@ fn calculate_pairwise_similarities(
                             0.0
                         };
 
-                        local_similarities.push(((j, i), identity));
+                        // (i, j) with i < j, matching the (min, max) lookups in detect_chimeras.
+                        local_similarities.push(((i, j), identity));
                     }
                 }
             }

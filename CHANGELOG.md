@@ -2,6 +2,10 @@
 
 All notable changes to savont will be documented in this file.
 
+## [0.8.2] - 2026-11-17
+
+- Fixed chimera detection ignoring parent similarity since v0.4: pairwise similarities were stored as `(j, i)` but looked up as `(i, j)`, so every lookup missed. Mosaics of near-identical parents (e.g. rRNA copy variants) were wrongly removed, and single-parent chimeras were never detected. **ASV outputs will change.** Reported in #22.
+
 ## [0.8.1] - 2026-10-28
 
 - Fixed `final_assignments.tsv` showing every read as `unassigned` when read names contain tabs (dorado writes BAM tags there). `read_id` is now the name up to the first whitespace.

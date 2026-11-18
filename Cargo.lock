@@ -1119,7 +1119,7 @@ dependencies = [
 
 [[package]]
 name = "savont"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "approx 0.4.0",
  "assert_cmd",
