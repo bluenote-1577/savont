@@ -53,8 +53,7 @@ savont asv tests/data/ont_zymo_1000.trimmed.fq.gz -o test_dataset #takes a few s
 [![Anaconda-Server Badge](https://anaconda.org/bioconda/savont/badges/latest_release_date.svg)](https://anaconda.org/bioconda/savont)
 
 ```sh
-mamba install -c bioconda savont
-# or use conda instead of mamba
+conda install -c bioconda savont
 ```
 
 ## Quick start for trimmed full-length 16S amplicons
