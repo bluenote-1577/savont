@@ -53,8 +53,7 @@ savont asv tests/data/ont_zymo_1000.trimmed.fq.gz -o test_dataset #takes a few s
 [![Anaconda-Server Badge](https://anaconda.org/bioconda/savont/badges/latest_release_date.svg)](https://anaconda.org/bioconda/savont)
 
 ```sh
-mamba install -c bioconda savont
-# or use conda instead of mamba
+conda install -c bioconda savont
 ```
 
 ## Quick start for trimmed full-length 16S amplicons
@@ -64,7 +63,7 @@ mamba install -c bioconda savont
 > [!NOTE]
 > If you're not using full length 16S reads (~1.5 kbp), then please set the `--min-read-length` and `--max-read-length` parameters. 
 
-You can either run savont in single-sample mode or pool samples together. See [documentation on multi-sample profiling](#multi-sample-savont-workflow).
+You can either run savont in single-sample mode or pool samples together. Pooling samples may increase peak RAM usage substantially. See [documentation on multi-sample profiling](#multi-sample-savont-workflow).
 
 ```sh
 # generate 16S ASVs for ONT / HiFi after cutadapt
@@ -143,7 +142,7 @@ You can either
 
 2. Or, you can pool samples through `savont asv --pooled-samples sample1.fq sample2.fq ...`. This runs ASV detection on the concatenation of all samples, but sample-by-sample abundance quantification.
 
-Pooling may allow recovery of low-abundance ASVs and prevent cross-sample ASV splitting ([see here](https://github.com/bluenote-1577/savont/issues/2)). However, pooling is more computationally expensive, both in terms of memory and speed. 
+Pooling may allow recovery of low-abundance ASVs and prevent cross-sample ASV splitting ([discussion here](https://github.com/bluenote-1577/savont/issues/2)). However, pooling is more computationally expensive, both in terms of memory and speed; see ([discussion here](https://github.com/bluenote-1577/savont/issues/23)). 
 
 
 ### ASV output
