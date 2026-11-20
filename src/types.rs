@@ -406,35 +406,95 @@ pub struct TigRead {
 pub type Percentage = f64;
 pub type Fraction = f32;
 
-//TODO: we restructure minimizers and snpmmer positions to another vector
-//and change to u32 to save space
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct TwinRead {
-    //pub minimizers: Vec<(usize, u64)>,
-    pub minimizer_positions: Vec<u32>,
-    pub minimizer_kmers: Vec<Kmer48>,
-    //pub snpmers: Vec<(usize, u64)>,
-    pub snpmer_kmers: Vec<Kmer48>,
-    pub snpmer_positions: Vec<u32>,
+    /// Minimizer (syncmer) start positions, encoded with `encode_positions`. Only positions
+    /// are stored: the k-mers are recomputed from `dna_seq` by `minimizer_kmers()`.
+    pub(crate) minimizer_positions_enc: Vec<u8>,
+    /// SNPmer start positions (after high-frequency filtering), encoded the same way.
+    pub(crate) snpmer_positions_enc: Vec<u8>,
     pub blockmer_positions: Vec<u32>,
     pub blockmer_canonical: Vec<bool>,
     pub id: String,
     pub base_id: String,
     pub k: u8,
     pub l: u8,
-    pub base_length: usize,
     pub dna_seq: Seq<Dna>,
     pub qual_seq: Option<Seq<QualCompact3>>,
     pub est_id: Option<Percentage>,
-    pub min_depth_multi: Option<MultiCov>,
-    pub median_depth: Option<f64>,
-    pub split_chimera: bool,
-    pub split_start: u32,
-    pub outer: bool,
-    pub snpmer_id_threshold: Option<f64>,
-    pub lsh_signatures: Vec<Option<u64>>,
     /// 0-based index of the input file this read came from (for --pooled-samples)
     pub file_idx: u32,
+}
+
+/// Encodes ascending positions as LEB128 varints of the gaps between them (the first
+/// relative to 0). Seeds are a few bases apart, so most positions take one byte instead of
+/// four, and none of the k-mer bytes need to be stored at all.
+pub(crate) fn encode_positions(positions: &[u32]) -> Vec<u8> {
+    let mut encoded = Vec::with_capacity(positions.len() + positions.len() / 8);
+    let mut prev = 0;
+    for &pos in positions {
+        debug_assert!(pos >= prev, "positions must be ascending");
+        let mut delta = pos - prev;
+        while delta >= 0x80 {
+            encoded.push((delta as u8) | 0x80);
+            delta >>= 7;
+        }
+        encoded.push(delta as u8);
+        prev = pos;
+    }
+    encoded.shrink_to_fit();
+    encoded
+}
+
+/// Iterates over positions produced by `encode_positions`.
+pub(crate) fn decode_positions(encoded: &[u8]) -> impl Iterator<Item = u32> + '_ {
+    let mut bytes = encoded.iter();
+    let mut pos = 0u32;
+    std::iter::from_fn(move || {
+        let mut delta = 0u32;
+        let mut shift = 0;
+        loop {
+            let byte = *bytes.next()?;
+            delta |= ((byte & 0x7F) as u32) << shift;
+            if byte & 0x80 == 0 {
+                break;
+            }
+            shift += 7;
+        }
+        pos += delta;
+        Some(pos)
+    })
+}
+
+/// Every varint ends in exactly one byte without the continuation bit.
+fn count_positions(encoded: &[u8]) -> usize {
+    encoded.iter().filter(|&&byte| byte & 0x80 == 0).count()
+}
+
+// `raw_kmer` reads the 2-bit bases straight out of bio-seq's `usize` storage words.
+const _: () = assert!(usize::BITS == 64, "savont requires a 64-bit target");
+
+/// The `k` bases of `seq` starting at `pos`, packed two bits per base with the first base
+/// in the lowest bits (bio-seq's layout: A=0, C=1, G=2, T=3).
+///
+/// This replaces `Kmer::unsafe_from_seqslice`, which goes through bitvec's generic
+/// `load_le` and was ~3x slower. That mattered once k-mers stopped being stored and every
+/// lookup became a recompute.
+#[inline]
+fn raw_kmer(seq: &Seq<Dna>, pos: usize, k: usize) -> u64 {
+    debug_assert!(k <= 32 && pos + k <= seq.len());
+    let words = seq.into_raw();
+    let bit = 2 * pos;
+    let (word, offset) = (bit / 64, bit % 64);
+    let mut raw = (words[word] as u64) >> offset;
+    if offset + 2 * k > 64 {
+        raw |= (words[word + 1] as u64) << (64 - offset);
+    }
+    let raw = raw & (u64::MAX >> (64 - 2 * k));
+    // Assumes the bit vector starts at bit 0 of its first word, true for every `Seq` built
+    // from bytes or cloned. Checked against bio-seq's own slice loading in debug builds.
+    debug_assert_eq!(Ok(raw as usize), usize::try_from(&seq[pos..pos + k]));
+    raw
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -591,215 +651,116 @@ fn reverse_bit_pairs(n: u64, k: usize) -> u64 {
 }
 
 impl TwinRead {
+    /// The k-mer at `pos` on the given strand (`canonical` = forward).
     #[inline]
     pub fn kmer_from_position_canonical(&self, pos: u32, k: usize, canonical: bool) -> Kmer48 {
-        let pos = pos as usize;
-
-        //match various values of k from 17 - 23, odd
-        //bio-seq stores CA = 0001.
-        //our representation is CA = 0100.
-        // Internally, we want CA = 8 HEX = 0100. So
-        let kmer = match k {
-            13 => reverse_bit_pairs(
-                Kmer::<Dna, 13, u64>::unsafe_from_seqslice(&self.dna_seq[pos..pos + k]).bs,
-                k,
-            ),
-            15 => reverse_bit_pairs(
-                Kmer::<Dna, 15, u64>::unsafe_from_seqslice(&self.dna_seq[pos..pos + k]).bs,
-                k,
-            ),
-            17 => reverse_bit_pairs(
-                Kmer::<Dna, 17, u64>::unsafe_from_seqslice(&self.dna_seq[pos..pos + k]).bs,
-                k,
-            ),
-            19 => reverse_bit_pairs(
-                Kmer::<Dna, 19, u64>::unsafe_from_seqslice(&self.dna_seq[pos..pos + k]).bs,
-                k,
-            ),
-            20 => reverse_bit_pairs(
-                Kmer::<Dna, 20, u64>::unsafe_from_seqslice(&self.dna_seq[pos..pos + k]).bs,
-                k,
-            ),
-            21 => reverse_bit_pairs(
-                Kmer::<Dna, 21, u64>::unsafe_from_seqslice(&self.dna_seq[pos..pos + k]).bs,
-                k,
-            ),
-            22 => reverse_bit_pairs(
-                Kmer::<Dna, 22, u64>::unsafe_from_seqslice(&self.dna_seq[pos..pos + k]).bs,
-                k,
-            ),
-            23 => reverse_bit_pairs(
-                Kmer::<Dna, 23, u64>::unsafe_from_seqslice(&self.dna_seq[pos..pos + k]).bs,
-                k,
-            ),
-            _ => {
-                panic!("Invalid kmer size")
-            }
-        };
-
-        // get canonical k-mer based on sides
-        let reverse_kmer = reverse_bit_pairs(kmer ^ (u64::MAX), k);
+        let raw = raw_kmer(&self.dna_seq, pos as usize, k);
         if canonical {
-            Kmer48::from_u64(kmer)
+            Kmer48::from_u64(reverse_bit_pairs(raw, k))
         } else {
-            Kmer48::from_u64(reverse_kmer)
+            Kmer48::from_u64(!raw & (u64::MAX >> (64 - 2 * k)))
         }
     }
 
+    /// The k-mer at `pos` in seeding's canonical orientation: the strand that is smaller with
+    /// the middle base masked out. Seeding skips k-mers whose two masked strands are equal
+    /// (reverse-complement palindromic flanks), so every stored position has exactly one
+    /// canonical k-mer and this returns the same k-mer seeding saw.
     #[inline]
     pub fn kmer_from_position(&self, pos: u32, k: usize) -> Kmer48 {
-        let pos = pos as usize;
-
-        //match various values of k from 17 - 23, odd
-        //bio-seq stores CA = 0001.
-        //our representation is CA = 0100.
-        // Internally, we want CA = 8 HEX = 0100. So
-        let kmer = match k {
-            13 => reverse_bit_pairs(
-                Kmer::<Dna, 13, u64>::unsafe_from_seqslice(&self.dna_seq[pos..pos + k]).bs,
-                k,
-            ),
-            15 => reverse_bit_pairs(
-                Kmer::<Dna, 15, u64>::unsafe_from_seqslice(&self.dna_seq[pos..pos + k]).bs,
-                k,
-            ),
-            17 => reverse_bit_pairs(
-                Kmer::<Dna, 17, u64>::unsafe_from_seqslice(&self.dna_seq[pos..pos + k]).bs,
-                k,
-            ),
-            19 => reverse_bit_pairs(
-                Kmer::<Dna, 19, u64>::unsafe_from_seqslice(&self.dna_seq[pos..pos + k]).bs,
-                k,
-            ),
-            21 => reverse_bit_pairs(
-                Kmer::<Dna, 21, u64>::unsafe_from_seqslice(&self.dna_seq[pos..pos + k]).bs,
-                k,
-            ),
-            23 => reverse_bit_pairs(
-                Kmer::<Dna, 23, u64>::unsafe_from_seqslice(&self.dna_seq[pos..pos + k]).bs,
-                k,
-            ),
-            _ => {
-                panic!("Invalid kmer size")
-            }
-        };
-
-        // get canonical k-mer based on sides
-        let reverse_kmer = reverse_bit_pairs(kmer ^ (u64::MAX), k);
+        let raw = raw_kmer(&self.dna_seq, pos as usize, k);
+        // Our layout puts the first base in the highest bits, the reverse of bio-seq's...
+        let forward = reverse_bit_pairs(raw, k);
+        // ...so in our layout the reverse complement is simply bio-seq's bits complemented.
+        let reverse = !raw & (u64::MAX >> (64 - 2 * k));
         let mid_mask = !(3 << (k - 1));
-        if reverse_kmer & mid_mask < kmer & mid_mask {
-            Kmer48::from_u64(reverse_kmer)
+        if reverse & mid_mask < forward & mid_mask {
+            Kmer48::from_u64(reverse)
         } else {
-            Kmer48::from_u64(kmer)
+            Kmer48::from_u64(forward)
         }
     }
 
-    pub fn clear(&mut self) {
-        self.minimizer_positions.clear();
-        self.snpmer_positions.clear();
-        self.minimizer_positions.shrink_to_fit();
-        self.snpmer_positions.shrink_to_fit();
+    pub fn minimizer_positions(&self) -> impl Iterator<Item = u32> + '_ {
+        decode_positions(&self.minimizer_positions_enc)
     }
 
-    pub fn minimizer_kmers(&self) -> &Vec<Kmer48> {
-        &self.minimizer_kmers
+    pub fn snpmer_positions(&self) -> impl Iterator<Item = u32> + '_ {
+        decode_positions(&self.snpmer_positions_enc)
     }
 
-    pub fn snpmer_kmers(&self) -> &Vec<Kmer48> {
-        //self.snpmer_positions.iter().map(|&x| self.kmer_from_position(x, self.k as usize)).collect()
-        &self.snpmer_kmers
+    pub fn minimizer_count(&self) -> usize {
+        count_positions(&self.minimizer_positions_enc)
     }
 
-    /// Drops `Vec` growth slack from the per-read seed vectors.
-    ///
-    /// These are all built by repeated `push`, so each can end up holding close to
-    /// twice the capacity it needs. Measured on a 1M-read run, `snpmer_kmers` alone
-    /// carried 59% slack (~445 MB). Twin reads live for the entire run, so paying one
-    /// realloc per vector at construction to release that is worthwhile.
-    pub fn shrink_seed_vecs(&mut self) {
-        self.snpmer_kmers.shrink_to_fit();
-        self.snpmer_positions.shrink_to_fit();
-        self.minimizer_kmers.shrink_to_fit();
-        self.minimizer_positions.shrink_to_fit();
-        self.blockmer_positions.shrink_to_fit();
-        self.blockmer_canonical.shrink_to_fit();
+    pub fn snpmer_count(&self) -> usize {
+        count_positions(&self.snpmer_positions_enc)
     }
 
-    // pub fn minimizers(&self) -> impl Iterator<Item = (u32, Kmer48)>+ '_ {
-    //     //self.minimizer_positions.iter().zip(self.minimizer_kmers.iter()).map(|(x, y)| (*x, *y))
-    //     self.minimizer_positions.iter().map(|&x| (x, self.kmer_from_position(x, self.k as usize)))
-    // }
+    pub(crate) fn set_minimizer_positions(&mut self, positions: &[u32]) {
+        self.minimizer_positions_enc = encode_positions(positions);
+    }
 
-    pub fn minimizers_vec(&self) -> Vec<(u32, Kmer48)> {
-        //self.minimizer_positions.iter().zip(self.minimizer_kmers.iter()).map(|(x, y)| (*x, *y)).collect()
-        self.minimizer_positions
-            .iter()
-            .map(|&x| (x, self.kmer_from_position(x, self.k as usize)))
+    pub(crate) fn set_snpmer_positions(&mut self, positions: &[u32]) {
+        self.snpmer_positions_enc = encode_positions(positions);
+    }
+
+    /// Recomputes the minimizer k-mers from the sequence. Every call redoes the work, so a
+    /// loop that visits the same read more than once should call this once and keep the result.
+    pub fn minimizer_kmers(&self) -> Vec<Kmer48> {
+        let k = self.k as usize;
+        self.minimizer_positions()
+            .map(|pos| self.kmer_from_position(pos, k))
             .collect()
     }
 
-    // pub fn snpmers(&self) -> impl Iterator<Item = (u32, Kmer48)> + '_ {
-    //     //self.snpmer_positions.iter().zip(self.snpmer_kmers.iter()).map(|(x, y)| (*x, *y))
-    //     self.snpmer_positions.iter().map(|&x| (x, self.kmer_from_position(x, self.k as usize)))
-    // }
+    /// Recomputes the SNPmer k-mers; the same caching advice as `minimizer_kmers` applies.
+    pub fn snpmer_kmers(&self) -> Vec<Kmer48> {
+        self.snpmers().map(|(_, kmer)| kmer).collect()
+    }
+
+    pub(crate) fn snpmers(&self) -> impl Iterator<Item = (u32, Kmer48)> + '_ {
+        let k = self.k as usize;
+        self.snpmer_positions()
+            .map(move |pos| (pos, self.kmer_from_position(pos, k)))
+    }
 
     pub fn snpmers_vec(&self) -> Vec<(u32, Kmer48)> {
-        //self.snpmer_positions.iter().zip(self.snpmer_kmers.iter()).map(|(x, y)| (*x, *y)).collect()
-        self.snpmer_positions
-            .iter()
-            .map(|&x| (x, self.kmer_from_position(x, self.k as usize)))
-            .collect()
+        self.snpmers().collect()
     }
 
-    // Retain only the minimizers at the given INDICES, not positions
-    pub fn retain_mini_indices(&mut self, positions: FxHashSet<usize>) {
-        //retain_vec_indices(&mut self.minimizer_kmers, &positions);
-        retain_vec_indices(&mut self.minimizer_positions, &positions);
-        //self.minimizer_kmers.shrink_to_fit();
-        self.minimizer_positions.shrink_to_fit();
-    }
-
-    // Retain only the snpmers at the given INDICES, not positions
-    pub fn retain_snpmer_indices(&mut self, positions: FxHashSet<usize>) {
-        //retain_vec_indices(&mut self.snpmer_kmers, &positions);
-        retain_vec_indices(&mut self.snpmer_positions, &positions);
-        //self.snpmer_kmers.shrink_to_fit();
-        self.snpmer_positions.shrink_to_fit();
-    }
-
-    /// Compute and store the LSH bucket signatures for all hash tables.
-    /// Call this after minimizer filtering is complete (i.e., after retain_mini_indices).
-    pub fn compute_lsh_signatures(&mut self) {
-        use fxhash::FxHasher64;
-        use std::hash::Hasher;
-
-        let minimizers = self.minimizer_kmers();
-        self.lsh_signatures = (0..LSH_NUM_TABLES)
-            .map(|table_idx| {
-                let hash_seed = table_idx as u64;
-                if minimizers.len() < LSH_BUCKET_SIZE {
-                    return None;
-                }
-                let mut hashed: Vec<(u64, Kmer48)> = minimizers
-                    .iter()
-                    .map(|&kmer| {
-                        let mut hasher = FxHasher64::default();
-                        hasher.write_u64(hash_seed);
-                        hasher.write_u64(kmer.to_u64());
-                        (hasher.finish(), kmer)
-                    })
-                    .collect();
-                hashed.sort_by_key(|x| x.0);
-                let mut signature: u64 = 0;
-                for i in 0..LSH_BUCKET_SIZE {
-                    signature ^= hashed[i].1.to_u64().wrapping_mul(i as u64 + 1);
-                }
-                Some(signature)
-            })
+    /// Keeps only the SNPmers whose k-mer passes `keep`.
+    pub fn retain_snpmers(&mut self, mut keep: impl FnMut(Kmer48) -> bool) {
+        let kept: Vec<u32> = self
+            .snpmers()
+            .filter(|&(_, kmer)| keep(kmer))
+            .map(|(pos, _)| pos)
             .collect();
+        self.set_snpmer_positions(&kept);
+    }
+
+    /// Drops growth slack from the per-read buffers.
+    ///
+    /// bio-seq builds a `Seq` from a `Vec<u8>` without a size hint, so its buffer doubles
+    /// past the data (~520 B for ~340 B of bases). Cloning a `Seq` allocates exactly. Twin
+    /// reads live for the whole run, so one extra allocation per buffer at construction is
+    /// worth it.
+    pub fn shrink_to_fit(&mut self) {
+        self.minimizer_positions_enc.shrink_to_fit();
+        self.snpmer_positions_enc.shrink_to_fit();
+        self.blockmer_positions.shrink_to_fit();
+        self.blockmer_canonical.shrink_to_fit();
+        self.dna_seq = self.dna_seq.clone();
+        if let Some(qual) = &self.qual_seq {
+            self.qual_seq = Some(qual.clone());
+        }
     }
 
     pub fn blockmers_vec(&self) -> Vec<(u32, u64)> {
+        self.blockmers().collect()
+    }
+
+    pub(crate) fn blockmers(&self) -> impl Iterator<Item = (u32, u64)> + '_ {
         self.blockmer_positions
             .iter()
             .zip(self.blockmer_canonical.iter())
@@ -811,54 +772,40 @@ impl TwinRead {
                 );
                 (pos, kmer.to_u64())
             })
-            .collect()
-    }
-
-    pub fn shift_and_retain(
-        &mut self,
-        other_read: &TwinRead,
-        last_break: usize,
-        bp_start: usize,
-        k: usize,
-    ) {
-        // new_read.minimizers = twin_read.minimizers.iter().filter(|x| x.0 >= last_break && x.0 + k - 1 < bp_start).copied().map(|x| (x.0 - last_break, x.1)).collect();
-        // new_read.snpmers = twin_read.snpmers.iter().filter(|x| x.0 >= last_break && x.0 + k - 1 < bp_start).copied().map(|x| (x.0 - last_break, x.1)).collect();
-        // new_read.minimizers.shrink_to_fit();
-        // new_read.snpmers.shrink_to_fit();
-
-        let mut mini_positions_filtered = Vec::new();
-        let mut snp_positions_filtered = Vec::new();
-
-        for &pos in other_read.minimizer_positions.iter() {
-            if pos >= last_break as u32 && pos + k as u32 - 1 < bp_start as u32 {
-                mini_positions_filtered.push(pos - last_break as u32);
-            }
-        }
-
-        for &pos in other_read.snpmer_positions.iter() {
-            if pos >= last_break as u32 && pos + k as u32 - 1 < bp_start as u32 {
-                snp_positions_filtered.push(pos - last_break as u32);
-            }
-        }
-
-        //shirnk to fit
-        mini_positions_filtered.shrink_to_fit();
-        snp_positions_filtered.shrink_to_fit();
-
-        self.minimizer_positions = mini_positions_filtered;
-        //self.minimizer_kmers = mini_kmers_filtered;
-        self.snpmer_positions = snp_positions_filtered;
-        //self.snpmer_kmers = snp_kmers_filtered;
     }
 }
 
-pub fn retain_vec_indices<T>(vec: &mut Vec<T>, positions: &FxHashSet<usize>) {
-    let mut i = 0;
-    vec.retain(|_| {
-        let keep = positions.contains(&i);
-        i += 1;
-        keep
-    });
+/// LSH bucket signatures of a read's minimizers, one per hash table.
+pub(crate) fn lsh_signatures(minimizers: &[Kmer48]) -> [Option<u64>; LSH_NUM_TABLES] {
+    use fxhash::FxHasher64;
+    use std::hash::Hasher;
+
+    if minimizers.len() < LSH_BUCKET_SIZE {
+        return [None; LSH_NUM_TABLES];
+    }
+    std::array::from_fn(|table_idx| {
+        // The old stable sort broke hash ties by the original minimizer order.
+        let mut lowest = [(u64::MAX, usize::MAX); LSH_BUCKET_SIZE];
+        for (index, kmer) in minimizers.iter().enumerate() {
+            let mut hasher = FxHasher64::default();
+            hasher.write_u64(table_idx as u64);
+            hasher.write_u64(kmer.to_u64());
+            let entry = (hasher.finish(), index);
+            let mut slot = LSH_BUCKET_SIZE - 1;
+            if entry < lowest[slot] {
+                while slot > 0 && entry < lowest[slot - 1] {
+                    lowest[slot] = lowest[slot - 1];
+                    slot -= 1;
+                }
+                lowest[slot] = entry;
+            }
+        }
+        let mut signature = 0;
+        for (rank, (_, index)) in lowest.into_iter().enumerate() {
+            signature ^= minimizers[index].to_u64().wrapping_mul(rank as u64 + 1);
+        }
+        Some(signature)
+    })
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
@@ -1173,6 +1120,93 @@ pub struct HeavyCutOptions<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lsh_signatures_match_stable_sort_with_repeated_minimizers() {
+        use fxhash::FxHasher64;
+        use std::hash::Hasher;
+
+        let raw = [9, 2, 4, 2, 1, 9, 38, 1, 14, 15, 64, 38, 0xFFFF_FFFF_FFFF];
+        for end in 0..=raw.len() {
+            let minimizers: Vec<Kmer48> =
+                raw[..end].iter().copied().map(Kmer48::from_u64).collect();
+            let expected = std::array::from_fn(|table_idx| {
+                if end < LSH_BUCKET_SIZE {
+                    return None;
+                }
+                let mut hashed: Vec<_> = raw[..end]
+                    .iter()
+                    .copied()
+                    .map(|kmer| {
+                        let mut hasher = FxHasher64::default();
+                        hasher.write_u64(table_idx as u64);
+                        hasher.write_u64(kmer);
+                        (hasher.finish(), kmer)
+                    })
+                    .collect();
+                hashed.sort_by_key(|&(hash, _)| hash);
+                let signature = hashed[..LSH_BUCKET_SIZE]
+                    .iter()
+                    .enumerate()
+                    .fold(0, |value, (i, &(_, kmer))| {
+                        value ^ kmer.wrapping_mul(i as u64 + 1)
+                    });
+                Some(signature)
+            });
+            assert_eq!(lsh_signatures(&minimizers), expected);
+        }
+    }
+
+    #[test]
+    fn positions_round_trip() {
+        let positions = [0, 1, 5, 127, 128, 300, 16_683, 16_684, 2_000_000, u32::MAX];
+        let encoded = encode_positions(&positions);
+        assert_eq!(decode_positions(&encoded).collect::<Vec<_>>(), positions);
+        assert_eq!(count_positions(&encoded), positions.len());
+        assert!(encode_positions(&[]).is_empty());
+        assert_eq!(decode_positions(&[]).count(), 0);
+    }
+
+    /// Recomputed k-mers must equal what seeding computes from the raw bytes: forward strand
+    /// when its masked form is strictly smaller, otherwise the reverse complement.
+    #[test]
+    fn kmer_from_position_matches_seeding() {
+        let mut state = 0x9E37_79B9_7F4A_7C15u64;
+        let bases: Vec<u8> = (0..1000)
+            .map(|_| {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                b"ACGT"[(state >> 32) as usize % 4]
+            })
+            .collect();
+        let read = TwinRead {
+            dna_seq: bases.clone().try_into().unwrap(),
+            ..TwinRead::default()
+        };
+        for k in [13, 15, 17, 19, 21, 23] {
+            let mask = u64::MAX >> (64 - 2 * k);
+            let mid_mask = !(3u64 << (k - 1));
+            for pos in 0..=bases.len() - k {
+                let forward = bases[pos..pos + k]
+                    .iter()
+                    .fold(0u64, |acc, &b| (acc << 2) | BYTE_TO_SEQ[b as usize] as u64);
+                let reverse = bases[pos..pos + k]
+                    .iter()
+                    .rev()
+                    .fold(0u64, |acc, &b| (acc << 2) | (3 - BYTE_TO_SEQ[b as usize] as u64))
+                    & mask;
+                let pos32 = pos as u32;
+                assert_eq!(read.kmer_from_position_canonical(pos32, k, true).to_u64(), forward);
+                assert_eq!(read.kmer_from_position_canonical(pos32, k, false).to_u64(), reverse);
+                if forward & mid_mask == reverse & mid_mask {
+                    continue; // palindromic flanks: seeding never stores these
+                }
+                let seeding = if forward & mid_mask < reverse & mid_mask { forward } else { reverse };
+                assert_eq!(read.kmer_from_position(pos32, k).to_u64(), seeding);
+            }
+        }
+    }
 
     #[test]
     fn convert_from_u64() {

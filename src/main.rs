@@ -94,12 +94,7 @@ fn run_cluster(args: &cli::ClusterArgs, cli_args: &cli::Cli) {
     log::info!("=== STAGE 4: Generating consensus sequences and analyzing pileupes ===");
     let mut consensuses = alignment::align_and_consensus(&twin_reads, clusters, &args, &temp_dir);
 
-    // Pileups are generated in batches rather than all at once. One pileup costs roughly
-    // hpc_len * min(depth, MAX_SEQS_CONSENSUS) * 32 bytes (a `bases` entry per aligned
-    // read per position), so holding one per cluster made peak memory scale with the
-    // number of clusters — tens of GB for a diverse community with thousands of ASVs.
-    // Batching bounds that without reducing parallelism: every batch is still processed
-    // across all threads, and the batch floor keeps all threads fed.
+    // Keep the pileup batch sizes so compact observations lower peak memory.
     let batches = alignment::plan_pileup_batches(&consensuses, &args);
     log::info!(
         "Generating pileups for {} clusters in {} batch(es)",
@@ -107,17 +102,17 @@ fn run_cluster(args: &cli::ClusterArgs, cli_args: &cli::Cli) {
         batches.len()
     );
 
-    // Pass 1: error rates only need the deepest 10% of clusters, so build just those.
+    // Pass 1: error rates only need the deepest 10% of clusters, so build just those,
+    // under the same memory budget as pass 2 (the counts are summed batch by batch).
     let top_indices = alignment::top_cluster_indices(&consensuses, 0.1);
-    let quality_error_map = {
-        let top_pileups = alignment::generate_consensus_pileups(
-            &twin_reads,
-            &mut consensuses,
-            &args,
-            &top_indices,
-        );
-        alignment::estimate_quality_error_rates(&top_pileups)
-    }; // top_pileups dropped here
+    let mut quality_stats = alignment::QualityStats::default();
+    for batch in alignment::plan_pileup_batches_for(&consensuses, &top_indices, &args) {
+        let top_pileups =
+            alignment::generate_consensus_pileups(&twin_reads, &mut consensuses, &args, &batch);
+        alignment::accumulate_quality_stats(&mut quality_stats, &top_pileups);
+    }
+    let quality_error_map =
+        alignment::estimate_quality_error_rates(quality_stats, top_indices.len());
 
     // Pass 2: analyze every cluster, one batch at a time. Regenerating the top 10% is
     // safe — pileup contents depend only on the consensus sequence and its reads.
@@ -197,12 +192,15 @@ fn run_cluster(args: &cli::ClusterArgs, cli_args: &cli::Cli) {
 
     // Refine ASV depths using EM algorithm on read-level mappings
     log::info!("=== STAGE 7: Refining ASV depths with alignments and EM algorithm ===");
-    alignment::refine_asv_depths_with_em(
+    // In pooled mode, keep each read's Stage 7 result so Stage 7b can reuse it.
+    let per_sample_quantification = args.pooled_samples && args.input_files.len() > 1;
+    let stage7_hits = alignment::refine_asv_depths_with_em(
         &twin_reads,
         &mut consensuses,
         &kmer_info,
         &args,
         &temp_dir,
+        per_sample_quantification,
     );
     consensuses.sort_by(|a, b| {
         b.depth
@@ -249,7 +247,7 @@ fn run_cluster(args: &cli::ClusterArgs, cli_args: &cli::Cli) {
                 .to_string()
         })
         .collect();
-    if args.pooled_samples && args.input_files.len() > 1 {
+    if per_sample_quantification {
         log::info!(
             "=== STAGE 7b: Per-sample quantification for {} samples ===",
             args.input_files.len()
@@ -263,6 +261,7 @@ fn run_cluster(args: &cli::ClusterArgs, cli_args: &cli::Cli) {
             &kmer_info,
             &args,
             &asv_fasta_for_per_sample,
+            stage7_hits.as_ref(),
         );
         for (i, c) in consensuses.iter_mut().enumerate() {
             c.per_sample_depths = per_sample[i].clone();
@@ -679,7 +678,7 @@ fn get_twin_reads_from_kmer_info(
     });
     let num_reads_without_snpmers = twin_reads_raw
         .iter()
-        .filter(|tr| tr.snpmers_vec().is_empty())
+        .filter(|tr| tr.snpmer_count() == 0)
         .count();
     let fraction_without = num_reads_without_snpmers as f64 / twin_reads_raw.len() as f64;
     log::info!(

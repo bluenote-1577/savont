@@ -1,10 +1,10 @@
 use crate::cli::ClusterArgs as Cli;
 use crate::types::*;
 use crate::utils;
-use minimap2::{Aligner, Strand};
+use minimap2::{Aligner, Built, Strand};
 use rayon::prelude::*;
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 
 /// Represents a chimeric consensus sequence
 #[derive(Debug, Clone)]
@@ -44,8 +44,6 @@ pub fn detect_chimeras(consensuses: &mut [ConsensusSequence], args: &Cli) -> Vec
         consensuses.len()
     );
 
-    // Calculate pairwise similarities between all consensuses (for the <99% check)
-    let similarities = calculate_pairwise_similarities(consensuses, args);
     let chimera_scores: Mutex<HashMap<usize, f64, _>> = Mutex::new(HashMap::new());
 
     let chimeras = Mutex::new(Vec::new());
@@ -56,8 +54,11 @@ pub fn detect_chimeras(consensuses: &mut [ConsensusSequence], args: &Cli) -> Vec
         log::warn!("Chimera detection match length is set to a very low value of {} < 10. This may lead to false positives.", min_match_length);
     }
 
-    // For each consensus, check if it's a chimera (using decompressed sequences)
-    consensuses.par_iter().enumerate().for_each(|(query_idx, query_consensus)| {
+    // Phase 1: for each consensus, find its perfect left/right matches against deeper
+    // consensuses. Each parent's index is built once and shared by every query.
+    let parent_aligners: Vec<OnceLock<Aligner<Built>>> =
+        (0..consensuses.len()).map(|_| OnceLock::new()).collect();
+    let all_best: Vec<BestAlignments> = consensuses.par_iter().enumerate().map(|(query_idx, query_consensus)| {
         let query_seq = query_consensus.decompressed_sequence.as_ref()
             .expect("Consensus sequence must be decompressed before chimera detection");
         let query_depth = query_consensus.depth;
@@ -86,14 +87,15 @@ pub fn detect_chimeras(consensuses: &mut [ConsensusSequence], args: &Cli) -> Vec
             let ref_seq = ref_consensus.decompressed_sequence.as_ref()
                 .expect("Consensus sequence must be decompressed before chimera detection");
 
-            // Align query to this reference. One index serves a single map() call here,
-            // so index construction dominates; see SHORT_REF_BUCKET_BITS.
-            let mut builder = Aligner::builder().map_ont();
-            builder.idxopt.bucket_bits = crate::constants::SHORT_REF_BUCKET_BITS;
-            let aligner = builder
-                .with_cigar()
-                .with_seq(ref_seq)
-                .expect("Failed to create aligner");
+            // Align query to this reference.
+            let aligner = parent_aligners[ref_idx].get_or_init(|| {
+                let mut builder = Aligner::builder().map_ont();
+                builder.idxopt.bucket_bits = crate::constants::SHORT_REF_BUCKET_BITS;
+                builder
+                    .with_cigar()
+                    .with_seq(ref_seq)
+                    .expect("Failed to create aligner")
+            });
 
             if let Ok(mappings) = aligner.map(query_seq, true, false, None, None, None) {
                 for mapping in mappings.iter() {
@@ -133,14 +135,24 @@ pub fn detect_chimeras(consensuses: &mut [ConsensusSequence], args: &Cli) -> Vec
                                 best_alignments.best_right_lens.push(right_match);
                                 best_alignments.best_right_refs.push(ref_idx);
                             }
-                            // if query_idx == 57{
-                                // println!("Query 57 vs Ref {}: Left match: {}, Right match: {}, CS: {}", ref_idx, left_match, right_match, alignment.cs.as_ref().unwrap());
-                            // }
                         }
                     }
                 }
             }
         }
+        best_alignments
+    }).collect();
+
+    // Phase 2: similarities, only for the pairs phase 3 looks up.
+    let similarities = needed_similarities(consensuses, &all_best);
+
+    // Phase 3: score each consensus and test the chimera rules.
+    consensuses.par_iter().enumerate().for_each(|(query_idx, query_consensus)| {
+        let query_seq = query_consensus.decompressed_sequence.as_ref()
+            .expect("Consensus sequence must be decompressed before chimera detection");
+        let query_depth = query_consensus.depth;
+        let query_len = query_seq.len();
+        let best_alignments = &all_best[query_idx];
 
         let mut min_chimera_score = 0.0 as f64;
         for (&left_ref, &left_len) in best_alignments.best_left_refs.iter().zip(best_alignments.best_left_lens.iter()) {
@@ -406,85 +418,71 @@ fn calculate_match_lengths(
     }
 }
 
-/// Calculate pairwise similarities between all consensuses using NM / alignment_length
-/// Returns a HashMap of (idx1, idx2) -> similarity
-fn calculate_pairwise_similarities(
+/// Similarities for exactly the consensus pairs `detect_chimeras` looks up: each query with
+/// each of its candidate parents, and every left/right parent pair. Computed exactly as the
+/// former all-pairs pass did: the lower-index consensus is indexed with `lrhq` and the other
+/// mapped to it; identity = 1 - NM / aligned query length; pairs whose lower-index
+/// consensus is more than 25x deeper are skipped, so lookups fall back to their defaults.
+fn needed_similarities(
     consensuses: &[ConsensusSequence],
-    _args: &Cli,
+    all_best: &[BestAlignments],
 ) -> HashMap<(usize, usize), f64> {
-    let similarities = Mutex::new(HashMap::new());
-
-    log::info!(
-        "Calculating pairwise similarities for {} consensuses (using decompressed sequences)",
-        consensuses.len()
-    );
-
-    consensuses.par_iter().enumerate().for_each(|(i, cons_i)| {
-        let seq_i = cons_i
-            .decompressed_sequence
-            .as_ref()
-            .expect("Consensus sequence must be decompressed before chimera detection");
-
-        // Align cons_i to cons_j (using decompressed sequences)
-        let aligner = Aligner::builder()
-            .lrhq()
-            .with_cigar()
-            .with_seq(seq_i)
-            .expect("Failed to create aligner");
-
-        let depth_i = cons_i.depth;
-
-        // Collected locally and merged under a single lock below; locking per pair
-        // serialized all threads on this inner O(n^2) loop.
-        let mut local_similarities: Vec<((usize, usize), f64)> = Vec::new();
-
-        for (j, cons_j) in consensuses.iter().enumerate() {
-            if i >= j {
-                continue; // Only calculate once per pair
-            }
-
-            let depth_j = cons_j.depth;
-
-            // Only calculate similarity for pairs that have sufficient depth difference
-            // (to save time, and because similar-depth consensuses are unlikely to be chimeras of each other)
-            if depth_i > depth_j * 25 {
-                continue;
-            }
-
-            let seq_j = cons_j
-                .decompressed_sequence
-                .as_ref()
-                .expect("Consensus sequence must be decompressed before chimera detection");
-
-            if let Ok(mappings) = aligner.map(seq_j, false, false, None, None, None) {
-                if let Some(best_mapping) = mappings.first() {
-                    if let Some(ref alignment) = best_mapping.alignment {
-                        // Calculate identity as 1 - (NM / alignment_length)
-                        let alignment_len =
-                            (best_mapping.query_end - best_mapping.query_start) as f64;
-                        let nm = alignment.nm as f64;
-
-                        let identity = if alignment_len > 0.0 {
-                            1.0 - (nm / alignment_len)
-                        } else {
-                            0.0
-                        };
-
-                        // (i, j) with i < j, matching the (min, max) lookups in detect_chimeras.
-                        local_similarities.push(((i, j), identity));
-                    }
+    let key = |a: usize, b: usize| (a.min(b), a.max(b));
+    let mut pairs: Vec<(usize, usize)> = Vec::new();
+    for (q, best) in all_best.iter().enumerate() {
+        for &l in &best.best_left_refs {
+            pairs.push(key(q, l));
+        }
+        for &r in &best.best_right_refs {
+            pairs.push(key(q, r));
+        }
+        for &l in &best.best_left_refs {
+            for &r in &best.best_right_refs {
+                if l != r {
+                    pairs.push(key(l, r));
                 }
             }
         }
+    }
+    pairs.sort_unstable();
+    pairs.dedup();
+    pairs.retain(|&(a, b)| consensuses[a].depth <= consensuses[b].depth * 25);
 
-        // One lock per outer iteration instead of one per pair. Keys (j, i) are unique
-        // across the whole loop, so the merged map is identical either way.
-        if !local_similarities.is_empty() {
-            similarities.lock().unwrap().extend(local_similarities);
-        }
-    });
-
-    similarities.into_inner().unwrap()
+    let n = consensuses.len();
+    log::info!(
+        "Calculating similarities for {} consensus pairs used by chimera checks (of {} total)",
+        pairs.len(),
+        n * n.saturating_sub(1) / 2
+    );
+    let aligners: Vec<OnceLock<Aligner<Built>>> = (0..n).map(|_| OnceLock::new()).collect();
+    let seq = |i: usize| {
+        consensuses[i]
+            .decompressed_sequence
+            .as_ref()
+            .expect("Consensus sequence must be decompressed before chimera detection")
+    };
+    pairs
+        .par_iter()
+        .filter_map(|&(a, b)| {
+            let aligner = aligners[a].get_or_init(|| {
+                Aligner::builder()
+                    .lrhq()
+                    .with_cigar()
+                    .with_seq(seq(a))
+                    .expect("Failed to create aligner")
+            });
+            let mappings = aligner.map(seq(b), false, false, None, None, None).ok()?;
+            let best_mapping = mappings.first()?;
+            let alignment = best_mapping.alignment.as_ref()?;
+            let alignment_len = (best_mapping.query_end - best_mapping.query_start) as f64;
+            let identity = if alignment_len > 0.0 {
+                1.0 - (alignment.nm as f64 / alignment_len)
+            } else {
+                0.0
+            };
+            Some(((a, b), identity))
+        })
+        .collect()
 }
 
 /// Remove chimeric consensuses from the list

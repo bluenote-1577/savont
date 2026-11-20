@@ -2,6 +2,15 @@
 
 All notable changes to savont will be documented in this file.
 
+## [0.9.0] - 2026-11-20
+
+**Big performance improvements**. 
+
+- Much faster iterative reclustering (~25x on a 1M-read pool), which could stall for days on large pooled runs (https://github.com/bluenote-1577/savont/issues/23).
+- Faster chimera detection and read-to-ASV mapping; pooled per-sample counts reuse the main mapping (~2.4x faster end-to-end on a 1M-read pool).
+- ~3x lower peak memory (10.8 → 3.7 GB on a 1M-read pool): reads store k-mer positions instead of k-mers, and pileups are stored more compactly.
+- SNPmer clustering now uses the same filtered SNPmers as reclustering. **ASV outputs may change slightly** for diverse pooled samples.
+
 ## [0.8.2] - 2026-11-17
 
 - Fixed chimera detection ignoring parent similarity since v0.4. Mosaics of near-identical parents (e.g. rRNA copy variants) were occasionally removed. **ASV outputs will change.**  Reported in https://github.com/bluenote-1577/savont/issues/22. Overall, there will be less aggressive chimera filtering (slightly more ASVs), but a few extra ASVs may be filtered due to a new single-parent chimera filter step. 

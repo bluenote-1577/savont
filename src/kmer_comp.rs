@@ -6,7 +6,6 @@ use crate::types::*;
 use crate::utils;
 use fishers_exact::fishers_exact;
 use fxhash::FxHashMap;
-use fxhash::FxHashSet;
 use rayon::prelude::*;
 use smallvec::smallvec;
 use smallvec::SmallVec;
@@ -188,62 +187,45 @@ pub fn twin_reads_from_snpmers(
                                 id,
                                 minimum_bq,
                             );
-                            if twin_read.is_some() {
+                            if let Some(mut twin_read) = twin_read {
+                                // Recomputed from the sequence, so fetch once for both loops.
+                                let minimizers = twin_read.minimizer_kmers();
                                 let mut kmer_counter_map = FxHashMap::default();
-                                for mini in twin_read.as_ref().unwrap().minimizer_kmers().iter() {
+                                for mini in minimizers.iter() {
                                     *kmer_counter_map.entry(*mini).or_insert(0) += 1;
                                 }
 
-                                let mut solid_mini_indices = FxHashSet::default();
-                                for (i, mini) in twin_read
-                                    .as_ref()
-                                    .unwrap()
-                                    .minimizer_kmers()
-                                    .iter()
-                                    .enumerate()
-                                {
+                                // Only the count of solid minimizers is needed: it gates the
+                                // repetitive-read check below. (The filtered minimizer positions
+                                // this used to also produce had no downstream reader.)
+                                let mut num_solid_minis = 0usize;
+                                for mini in minimizers.iter() {
                                     if kmer_counter_map[mini] > MAX_KMER_COUNT_IN_READ {
                                         continue;
                                     }
                                     if USE_SOLID_KMERS {
                                         if solid.contains(&Kmer48::from(*mini)) {
-                                            solid_mini_indices.insert(i);
+                                            num_solid_minis += 1;
                                         }
                                     } else {
                                         if !highfreq.contains(&Kmer48::from(*mini)) {
-                                            solid_mini_indices.insert(i);
+                                            num_solid_minis += 1;
                                         }
                                     }
                                 }
                                 //< 5 % of the k-mers are solid; remove. This is usually due to highly repetitive stuff.
-                                if solid_mini_indices.len() < seqlen / c / 20 {
+                                if num_solid_minis < seqlen / c / 20 {
                                     *num_repetitive.lock().unwrap() += 1;
                                     continue;
                                 }
 
-                                let mut solid_snpmer_indices = FxHashSet::default();
-                                for (i, snpmer) in twin_read
-                                    .as_ref()
-                                    .unwrap()
-                                    .snpmer_kmers()
-                                    .iter()
-                                    .enumerate()
-                                {
+                                twin_read.retain_snpmers(|snpmer| {
                                     if USE_SOLID_KMERS {
-                                        if solid.contains(&snpmer) {
-                                            solid_snpmer_indices.insert(i);
-                                        }
+                                        solid.contains(&snpmer)
                                     } else {
-                                        if !highfreq.contains(&snpmer) {
-                                            solid_snpmer_indices.insert(i);
-                                        }
+                                        !highfreq.contains(&snpmer)
                                     }
-                                }
-
-                                let mut twin_read = twin_read.unwrap();
-                                twin_read.retain_mini_indices(solid_mini_indices);
-                                twin_read.retain_snpmer_indices(solid_snpmer_indices);
-                                twin_read.compute_lsh_signatures();
+                                });
                                 twin_read.file_idx = file_idx_u32;
 
                                 let mut vec = twrv.lock().unwrap();
@@ -299,14 +281,14 @@ pub fn twin_reads_from_snpmers(
     twin_reads.retain(|x| x.est_id.is_none() || x.est_id.unwrap() >= args.quality_value_cutoff);
     let snpmer_densities = twin_reads
         .iter()
-        .map(|x| x.snpmer_positions.len() as f64 / x.base_length as f64)
+        .map(|x| x.snpmer_count() as f64 / x.dna_seq.len() as f64)
         .collect::<Vec<_>>();
     let mean_snpmer_density = snpmer_densities.iter().sum::<f64>() / snpmer_densities.len() as f64;
     log::info!("Mean SNPmer density: {:.2}%", mean_snpmer_density * 100.);
 
     let blockmer_densities = twin_reads
         .iter()
-        .map(|x| x.blockmer_positions.len() as f64 / x.base_length as f64)
+        .map(|x| x.blockmer_positions.len() as f64 / x.dna_seq.len() as f64)
         .collect::<Vec<_>>();
     let mean_blockmer_density =
         blockmer_densities.iter().sum::<f64>() / blockmer_densities.len() as f64;

@@ -317,7 +317,6 @@ pub fn get_twin_read_syncmer(
 ) -> Option<TwinRead> {
     let mut snpmer_positions = vec![];
     let mut minimizer_positions = vec![];
-    let mut minimizer_kmers = vec![];
     let mut snpmer_kmers = vec![];
     let mut blockmer_positions = vec![];
     let mut blockmer_canon = vec![];
@@ -415,6 +414,11 @@ pub fn get_twin_read_syncmer(
 
         let split_f = rolling_kmer_f_marker & split_mask;
         let split_r = rolling_kmer_r_marker & split_mask;
+        // Flanks that are reverse complements of each other have no canonical strand: both
+        // orientations mask to the same splitmer and differ only in the middle base. Neither
+        // SNPmers (also skipped when counting) nor minimizers are taken from such k-mers, so
+        // every stored position recomputes to a single k-mer (`TwinRead::kmer_from_position`).
+        let palindromic = split_f == split_r;
 
         let canonical_marker = split_f < split_r;
         let canonical_kmer_marker = if canonical_marker {
@@ -499,7 +503,7 @@ pub fn get_twin_read_syncmer(
         }
 
         // Check SNPmer
-        if snpmer_set.contains(&canonical_kmer_marker) {
+        if !palindromic && snpmer_set.contains(&canonical_kmer_marker) {
             let mid_base_qval = if let Some(qualities) = qualities.as_ref() {
                 let mid = i + 1 + mid_k - k;
                 qualities[mid] - 33
@@ -519,7 +523,7 @@ pub fn get_twin_read_syncmer(
             }
         }
         // Check for minimizer using syncmer method
-        if i >= k - 1 && s_mer_hashes.len() == k - s + 1 {
+        if !palindromic && i >= k - 1 && s_mer_hashes.len() == k - s + 1 {
             let middle_idx = (k - s) / 2;
             let middle_hash = s_mer_hashes[middle_idx];
 
@@ -533,7 +537,6 @@ pub fn get_twin_read_syncmer(
 
             if syncmer {
                 minimizer_positions.push((i + 1 - k) as u32);
-                minimizer_kmers.push(Kmer48::from(canonical_kmer_marker));
             }
         }
     }
@@ -547,23 +550,10 @@ pub fn get_twin_read_syncmer(
         );
     }
 
-    let mut no_dup_snpmers_kmers = vec![];
-    let mut no_dup_snpmers_positions = vec![];
     if DEDUP_SNPMERS {
-        for i in 0..snpmer_kmers.len() {
-            if dedup_snpmers[&(snpmer_kmers[i] & split_mask)] == 1 {
-                no_dup_snpmers_kmers.push(Kmer48::from_u64(snpmer_kmers[i]));
-                no_dup_snpmers_positions.push(snpmer_positions[i]);
-            }
-        }
-    }
-
-    let snpmer_kmers = no_dup_snpmers_kmers;
-    let snpmer_positions_final;
-    if DEDUP_SNPMERS {
-        snpmer_positions_final = no_dup_snpmers_positions;
-    } else {
-        snpmer_positions_final = snpmer_positions;
+        let mut kmers = snpmer_kmers.iter();
+        snpmer_positions
+            .retain(|_| dedup_snpmers[&(kmers.next().unwrap() & split_mask)] == 1);
     }
 
     let seq_id;
@@ -608,6 +598,8 @@ pub fn get_twin_read_syncmer(
                 let upper = b.to_ascii_uppercase();
                 if upper == b'N' || upper == b'n' {
                     b'A' // Replace 'N' with 'A'
+                } else if upper == b'U' {
+                    b'T' // Seeding (BYTE_TO_SEQ) also reads U as T
                 } else {
                     if upper != b'A' && upper != b'C' && upper != b'G' && upper != b'T' {
                         log::warn!(
@@ -634,12 +626,6 @@ pub fn get_twin_read_syncmer(
     }
 
     let mut twin_read = TwinRead {
-        //snpmer_kmers,
-        snpmer_positions: snpmer_positions_final,
-        snpmer_kmers,
-        //minimizer_kmers,
-        minimizer_positions,
-        minimizer_kmers,
         blockmer_positions,
         blockmer_canonical: blockmer_canon,
         //base_id: id.clone().split_ascii_whitespace().next().unwrap().to_string(),
@@ -648,21 +634,16 @@ pub fn get_twin_read_syncmer(
         id: id,
         k: k as u8,
         l: l as u8,
-        base_length: len,
         dna_seq,
         qual_seq: qual_seq,
         est_id: seq_id,
-        outer: false,
-        median_depth: None,
-        min_depth_multi: None,
-        split_chimera: false,
-        split_start: 0,
-        snpmer_id_threshold: None,
-        lsh_signatures: vec![],
         file_idx: 0,
+        ..TwinRead::default()
     };
-    // Release the push-growth slack before this read joins the long-lived read set.
-    twin_read.shrink_seed_vecs();
+    twin_read.set_minimizer_positions(&minimizer_positions);
+    twin_read.set_snpmer_positions(&snpmer_positions);
+    // Release growth slack before this read joins the long-lived read set.
+    twin_read.shrink_to_fit();
     Some(twin_read)
 }
 
